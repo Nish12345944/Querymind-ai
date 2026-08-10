@@ -18,13 +18,34 @@ from app.services.sql_validator import (
     validate_sql
 )
 
+from app.services.sql_executor import (
+    execute_readonly_sql
+)
+
 
 async def process_query(
     question: str
 ):
+    """
+    Main QueryMind query pipeline.
+
+    Flow:
+
+    User question
+        ↓
+    Clarification Engine
+        ↓
+    Schema RAG
+        ↓
+    Groq
+        ↓
+    SQL Validation
+        ↓
+    Read-only PostgreSQL
+    """
 
     # ---------------------------------------------------------
-    # 1. Analyze ambiguity
+    # 1. Analyze whether the question is ambiguous
     # ---------------------------------------------------------
 
     clarification = await analyze_question(
@@ -32,7 +53,7 @@ async def process_query(
     )
 
     # ---------------------------------------------------------
-    # 2. If ambiguous, create conversation
+    # 2. If ambiguous, create a conversation
     # ---------------------------------------------------------
 
     if clarification.get(
@@ -78,7 +99,7 @@ async def process_query(
     sql = sql_result["sql"]
 
     # ---------------------------------------------------------
-    # 4. Validate SQL
+    # 4. Validate generated SQL
     # ---------------------------------------------------------
 
     validation = await validate_sql(
@@ -94,15 +115,33 @@ async def process_query(
         }
 
     # ---------------------------------------------------------
-    # 5. Stop here for now.
-    # SQL execution comes in Step 13.
+    # 5. Execute validated SQL
+    # ---------------------------------------------------------
+
+    execution = await execute_readonly_sql(
+        sql
+    )
+
+    if not execution["success"]:
+
+        return {
+            "status": "execution_failed",
+            "sql": sql,
+            "validation": validation,
+            "error": execution["error"]
+        }
+
+    # ---------------------------------------------------------
+    # 6. Return query results
     # ---------------------------------------------------------
 
     return {
-        "status": "sql_ready",
+        "status": "query_executed",
         "question": question,
         "sql": sql,
         "validation": validation,
+        "row_count": execution["row_count"],
+        "rows": execution["rows"],
         "retrieved_schema": sql_result[
             "retrieved_schema"
         ]
@@ -113,6 +152,14 @@ async def process_clarification(
     conversation_id: str,
     answer: str
 ):
+    """
+    Continue a query after the user answers
+    a clarification question.
+    """
+
+    # ---------------------------------------------------------
+    # 1. Retrieve conversation
+    # ---------------------------------------------------------
 
     conversation = get_conversation(
         conversation_id
@@ -125,19 +172,29 @@ async def process_clarification(
             "reason": "Conversation not found."
         }
 
+    # ---------------------------------------------------------
+    # 2. Check conversation state
+    # ---------------------------------------------------------
+
     if conversation["status"] != "awaiting_clarification":
 
         return {
             "status": "error",
-            "reason": "Conversation is not awaiting clarification."
+            "reason": (
+                "Conversation is not awaiting clarification."
+            )
         }
+
+    # ---------------------------------------------------------
+    # 3. Get original question
+    # ---------------------------------------------------------
 
     original_question = conversation[
         "original_question"
     ]
 
     # ---------------------------------------------------------
-    # Combine original question + clarification
+    # 4. Combine original question + clarification
     # ---------------------------------------------------------
 
     clarified_question = (
@@ -146,7 +203,7 @@ async def process_clarification(
     )
 
     # ---------------------------------------------------------
-    # Generate SQL using clarified intent
+    # 5. Generate SQL using clarified question
     # ---------------------------------------------------------
 
     sql_result = await generate_sql(
@@ -156,7 +213,7 @@ async def process_clarification(
     sql = sql_result["sql"]
 
     # ---------------------------------------------------------
-    # Validate SQL
+    # 6. Validate generated SQL
     # ---------------------------------------------------------
 
     validation = await validate_sql(
@@ -168,27 +225,68 @@ async def process_clarification(
         update_conversation(
             conversation_id,
             clarification=answer,
-            status="sql_rejected"
+            status="sql_rejected",
+            generated_sql=sql
         )
 
         return {
             "status": "sql_rejected",
+            "conversation_id": conversation_id,
             "reason": validation["reason"],
             "sql": sql
         }
 
+    # ---------------------------------------------------------
+    # 7. Execute validated SQL
+    # ---------------------------------------------------------
+
+    execution = await execute_readonly_sql(
+        sql
+    )
+
+    if not execution["success"]:
+
+        update_conversation(
+            conversation_id,
+            clarification=answer,
+            status="execution_failed",
+            generated_sql=sql
+        )
+
+        return {
+            "status": "execution_failed",
+            "conversation_id": conversation_id,
+            "sql": sql,
+            "validation": validation,
+            "error": execution["error"]
+        }
+
+    # ---------------------------------------------------------
+    # 8. Update conversation state
+    # ---------------------------------------------------------
+
     update_conversation(
         conversation_id,
         clarification=answer,
-        status="sql_ready",
-        generated_sql=sql
+        status="query_executed",
+        generated_sql=sql,
+        rows=execution["rows"]
     )
 
+    # ---------------------------------------------------------
+    # 9. Return final result
+    # ---------------------------------------------------------
+
     return {
-        "status": "sql_ready",
+        "status": "query_executed",
         "conversation_id": conversation_id,
         "original_question": original_question,
         "clarification": answer,
         "sql": sql,
-        "validation": validation
+        "validation": validation,
+        "row_count": execution["row_count"],
+        "rows": execution["rows"],
+        "retrieved_schema": sql_result[
+            "retrieved_schema"
+        ]
     }
