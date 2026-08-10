@@ -7,6 +7,12 @@ from app.api.schema_documents import (
     router as schema_documents_router
 )
 from app.api.sql import router as sql_router
+from app.api.validation import (
+    router as validation_router
+)
+from app.api.clarification import (
+    router as clarification_router
+)
 
 
 
@@ -22,6 +28,8 @@ app.include_router(schema_router)
 app.include_router(schema_documents_router)
 app.include_router(rag_router)
 app.include_router(sql_router)
+app.include_router(validation_router)
+app.include_router(clarification_router)
 
 
 @app.get("/")
