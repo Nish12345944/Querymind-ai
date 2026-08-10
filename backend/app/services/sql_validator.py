@@ -6,19 +6,55 @@ from app.services.schema_service import (
 )
 
 
+FORBIDDEN_EXPRESSIONS = (
+    exp.Insert,
+    exp.Update,
+    exp.Delete,
+    exp.Drop,
+    exp.Create,
+    exp.Alter,
+    exp.Truncate,
+    exp.Merge,
+    exp.Grant,
+    exp.Revoke,
+)
+
+
 async def validate_sql(sql: str):
 
     sql = sql.strip()
+
+    # ---------------------------------------------------------
+    # 1. Empty query
+    # ---------------------------------------------------------
 
     if not sql:
 
         return {
             "valid": False,
-            "reason": "Empty SQL query."
+            "reason": "Empty SQL query.",
+            "checks": {}
         }
 
     # ---------------------------------------------------------
-    # 1. Parse SQL
+    # 2. Handle unsupported response
+    # ---------------------------------------------------------
+
+    if sql.upper() == "UNSUPPORTED":
+
+        return {
+            "valid": False,
+            "reason": (
+                "The question cannot be answered "
+                "using the available database schema."
+            ),
+            "checks": {
+                "unsupported": True
+            }
+        }
+
+    # ---------------------------------------------------------
+    # 3. Parse SQL
     # ---------------------------------------------------------
 
     try:
@@ -32,52 +68,91 @@ async def validate_sql(sql: str):
 
         return {
             "valid": False,
-            "reason": f"SQL syntax error: {str(exc)}"
+            "reason": f"SQL syntax error: {str(exc)}",
+            "checks": {
+                "syntax": False
+            }
         }
 
     # ---------------------------------------------------------
-    # 2. One statement only
+    # 4. One statement only
     # ---------------------------------------------------------
 
     if len(statements) != 1:
 
         return {
             "valid": False,
-            "reason": "Only one SQL statement is allowed."
+            "reason": "Only one SQL statement is allowed.",
+            "checks": {
+                "syntax": True,
+                "single_statement": False
+            }
         }
 
     statement = statements[0]
 
     # ---------------------------------------------------------
-    # 3. SELECT only
+    # 5. SELECT only
     # ---------------------------------------------------------
 
     if not isinstance(statement, exp.Select):
 
         return {
             "valid": False,
-            "reason": "Only SELECT queries are allowed."
+            "reason": "Only SELECT statements are allowed.",
+            "checks": {
+                "syntax": True,
+                "single_statement": True,
+                "select_only": False
+            }
         }
 
     # ---------------------------------------------------------
-    # 4. Load actual database schema
+    # 6. Check forbidden operations
+    # ---------------------------------------------------------
+
+    for forbidden_type in FORBIDDEN_EXPRESSIONS:
+
+        if statement.find(forbidden_type):
+
+            return {
+                "valid": False,
+                "reason": (
+                    "Forbidden SQL operation: "
+                    f"{forbidden_type.__name__}"
+                ),
+                "checks": {
+                    "syntax": True,
+                    "single_statement": True,
+                    "select_only": True,
+                    "forbidden_operations": False
+                }
+            }
+
+    # ---------------------------------------------------------
+    # 7. Get real database schema
     # ---------------------------------------------------------
 
     schema = await get_database_schema()
 
     valid_tables = set(schema.keys())
 
+    table_columns = {
+        table_name: {
+            column["name"]
+            for column in table_info["columns"]
+        }
+        for table_name, table_info in schema.items()
+    }
+
     # ---------------------------------------------------------
-    # 5. Validate referenced tables
+    # 8. Validate tables
     # ---------------------------------------------------------
 
-    referenced_tables = set()
-
-    for table in statement.find_all(exp.Table):
-
-        referenced_tables.add(
-            table.name
-        )
+    referenced_tables = {
+        table.name
+        for table in statement.find_all(exp.Table)
+    }
 
     unknown_tables = (
         referenced_tables - valid_tables
@@ -89,29 +164,31 @@ async def validate_sql(sql: str):
             "valid": False,
             "reason": (
                 "Unknown table(s): "
-                + ", ".join(sorted(unknown_tables))
-            )
+                + ", ".join(
+                    sorted(unknown_tables)
+                )
+            ),
+            "checks": {
+                "syntax": True,
+                "single_statement": True,
+                "select_only": True,
+                "tables": False
+            }
         }
 
     # ---------------------------------------------------------
-    # 6. Validate columns
+    # 9. Build table aliases
     # ---------------------------------------------------------
 
-    table_columns = {}
+    aliases = {}
 
-    for table_name, table_info in schema.items():
+    for table in statement.find_all(exp.Table):
 
-        table_columns[table_name] = {
-            column["name"]
-            for column in table_info["columns"]
-        }
+        aliases[table.alias_or_name] = table.name
 
-    # Build a global set of valid column names.
-    # This is useful for simple unqualified columns.
-    all_columns = set()
-
-    for columns in table_columns.values():
-        all_columns.update(columns)
+    # ---------------------------------------------------------
+    # 10. Validate columns
+    # ---------------------------------------------------------
 
     unknown_columns = []
 
@@ -119,50 +196,57 @@ async def validate_sql(sql: str):
 
         column_name = column.name
 
-        # Ignore wildcard:
         # SELECT *
         if column_name == "*":
             continue
 
-        table_alias = column.table
+        table_reference = column.table
 
         # -----------------------------------------------------
         # Qualified column:
-        # orders.total_amount
+        # p.product_name
         # -----------------------------------------------------
 
-        if table_alias:
+        if table_reference:
 
-            matching_table = None
+            actual_table = aliases.get(
+                table_reference
+            )
 
-            for table in statement.find_all(exp.Table):
+            if actual_table is None:
 
-                if table.alias_or_name == table_alias:
-
-                    matching_table = table.name
-                    break
-
-            if matching_table:
-
-                valid_columns = table_columns.get(
-                    matching_table,
-                    set()
+                unknown_columns.append(
+                    f"{table_reference}.{column_name}"
                 )
 
-                if column_name not in valid_columns:
+                continue
 
-                    unknown_columns.append(
-                        f"{table_alias}.{column_name}"
-                    )
+            valid_columns = table_columns.get(
+                actual_table,
+                set()
+            )
+
+            if column_name not in valid_columns:
+
+                unknown_columns.append(
+                    f"{actual_table}.{column_name}"
+                )
 
         # -----------------------------------------------------
         # Unqualified column:
-        # total_amount
+        # product_name
         # -----------------------------------------------------
 
         else:
 
-            if column_name not in all_columns:
+            matching_tables = [
+                table_name
+                for table_name, columns in table_columns.items()
+                if column_name in columns
+                and table_name in referenced_tables
+            ]
+
+            if not matching_tables:
 
                 unknown_columns.append(
                     column_name
@@ -177,14 +261,28 @@ async def validate_sql(sql: str):
                 + ", ".join(
                     sorted(set(unknown_columns))
                 )
-            )
+            ),
+            "checks": {
+                "syntax": True,
+                "single_statement": True,
+                "select_only": True,
+                "tables": True,
+                "columns": False
+            }
         }
 
     # ---------------------------------------------------------
-    # Everything passed
+    # 11. Everything passed
     # ---------------------------------------------------------
 
     return {
         "valid": True,
-        "reason": "SQL passed validation."
+        "reason": "SQL passed all validation checks.",
+        "checks": {
+            "syntax": True,
+            "single_statement": True,
+            "select_only": True,
+            "tables": True,
+            "columns": True
+        }
     }

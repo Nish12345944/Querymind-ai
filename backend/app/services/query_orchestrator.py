@@ -22,6 +22,9 @@ from app.services.sql_executor import (
     execute_readonly_sql
 )
 
+from app.services.answer_service import (
+    generate_answer
+)
 
 async def process_query(
     question: str
@@ -132,9 +135,19 @@ async def process_query(
         }
 
     # ---------------------------------------------------------
-    # 6. Return query results
+    # 6. Generate natural-language answer
     # ---------------------------------------------------------
+    answer = await generate_answer(
+        question=question,
+        sql=sql,
+        rows=execution["rows"]
+    )
 
+
+    # ---------------------------------------------------------
+    # 7. Return final result
+    # ---------------------------------------------------------
+    
     return {
         "status": "query_executed",
         "question": question,
@@ -142,6 +155,7 @@ async def process_query(
         "validation": validation,
         "row_count": execution["row_count"],
         "rows": execution["rows"],
+        "answer": answer,
         "retrieved_schema": sql_result[
             "retrieved_schema"
         ]
@@ -274,11 +288,35 @@ async def process_clarification(
     )
 
     # ---------------------------------------------------------
-    # 9. Return final result
+    # 9.  Generate natural-language answer
+    # ---------------------------------------------------------
+
+    final_answer = await generate_answer(
+        question=clarified_question,
+        sql=sql,
+        rows=execution["rows"]
+    )
+
+
+    # ---------------------------------------------------------
+    # 10. Update conversation
+    # ---------------------------------------------------------
+
+    update_conversation(
+        conversation_id,
+        clarification=answer,
+        status="completed",
+        generated_sql=sql,
+        rows=execution["rows"],
+        final_answer=final_answer
+    )
+
+    # ---------------------------------------------------------
+    # 11. Return final result
     # ---------------------------------------------------------
 
     return {
-        "status": "query_executed",
+        "status": "completed",
         "conversation_id": conversation_id,
         "original_question": original_question,
         "clarification": answer,
@@ -286,6 +324,7 @@ async def process_clarification(
         "validation": validation,
         "row_count": execution["row_count"],
         "rows": execution["rows"],
+        "answer": final_answer,
         "retrieved_schema": sql_result[
             "retrieved_schema"
         ]
