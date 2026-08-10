@@ -13,6 +13,7 @@ from app.api.validation import (
 from app.api.clarification import (
     router as clarification_router
 )
+from app.api.query import router as query_router
 
 
 
@@ -30,10 +31,12 @@ app.include_router(rag_router)
 app.include_router(sql_router)
 app.include_router(validation_router)
 app.include_router(clarification_router)
+app.include_router(query_router)
 
 
 @app.get("/")
 async def root():
+    
     return {
         "message": "QueryMind AI is running",
         "version": "0.1.0"
