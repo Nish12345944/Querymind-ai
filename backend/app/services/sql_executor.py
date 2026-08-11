@@ -62,10 +62,23 @@ async def execute_readonly_sql(sql: str):
         }
 
     # ---------------------------------------------------------
-    # 4. Add a maximum result limit
+    # 4. Enforce maximum result size
+    #
+    # IMPORTANT:
+    # Do NOT overwrite an existing LIMIT.
+    #
+    # Example:
+    #
+    #     LIMIT 5
+    #
+    # must remain LIMIT 5.
+    #
+    # Only add LIMIT 100 when the query has no LIMIT.
     # ---------------------------------------------------------
 
-    statement = statement.limit(MAX_ROWS)
+    if statement.args.get("limit") is None:
+
+        statement = statement.limit(MAX_ROWS)
 
     safe_sql = statement.sql(
         dialect="postgres"
@@ -91,6 +104,13 @@ async def execute_readonly_sql(sql: str):
             )
 
             rows = result.mappings().all()
+
+            # -------------------------------------------------
+            # Safety guard
+            #
+            # Existing LIMIT values are preserved, but never
+            # allow more than MAX_ROWS to leave the service.
+            # -------------------------------------------------
 
             rows = rows[:MAX_ROWS]
 

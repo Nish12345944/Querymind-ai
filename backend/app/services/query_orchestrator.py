@@ -26,6 +26,11 @@ from app.services.answer_service import (
     generate_answer
 )
 
+
+# ============================================================
+# PROCESS NEW QUERY
+# ============================================================
+
 async def process_query(
     question: str
 ):
@@ -35,34 +40,66 @@ async def process_query(
     Flow:
 
     User question
-        ↓
-    Clarification Engine
-        ↓
+          ↓
+    Intent Classification
+          ↓
+    ┌──────────────┬───────────────┬──────────────┐
+    │              │               │
+    CLEAR      AMBIGUOUS      UNSUPPORTED
+    │              │               │
+    ↓              ↓               ↓
+    SQL         Clarify          Reject
+    │
+    ↓
     Schema RAG
-        ↓
+    │
+    ↓
     Groq
-        ↓
+    │
+    ↓
     SQL Validation
-        ↓
+    │
+    ↓
     Read-only PostgreSQL
+    │
+    ↓
+    Natural-language answer
     """
 
-    # ---------------------------------------------------------
-    # 1. Analyze whether the question is ambiguous
-    # ---------------------------------------------------------
+    # ========================================================
+    # 1. Analyze user intent
+    # ========================================================
 
-    clarification = await analyze_question(
+    intent = await analyze_question(
         question
     )
 
-    # ---------------------------------------------------------
-    # 2. If ambiguous, create a conversation
-    # ---------------------------------------------------------
+    intent_type = intent.get(
+        "intent",
+        "AMBIGUOUS"
+    )
 
-    if clarification.get(
-        "needs_clarification",
-        False
-    ):
+    # ========================================================
+    # 2. UNSUPPORTED
+    # ========================================================
+
+    if intent_type == "UNSUPPORTED":
+
+        return {
+            "status": "unsupported",
+            "question": question,
+            "reason": intent.get(
+                "reason",
+                "The requested information "
+                "is not available in the database."
+            )
+        }
+
+    # ========================================================
+    # 3. AMBIGUOUS
+    # ========================================================
+
+    if intent_type == "AMBIGUOUS":
 
         conversation_id = str(
             uuid.uuid4()
@@ -75,92 +112,247 @@ async def process_query(
 
         update_conversation(
             conversation_id,
-            clarification=clarification,
+            clarification=intent,
             status="awaiting_clarification"
         )
 
         return {
             "status": "clarification_required",
             "conversation_id": conversation_id,
-            "question": clarification.get(
+            "question": intent.get(
                 "question"
             ),
-            "options": clarification.get(
+            "options": intent.get(
                 "options",
                 []
+            ),
+            "reason": intent.get(
+                "reason"
             )
         }
 
-    # ---------------------------------------------------------
-    # 3. Generate SQL
-    # ---------------------------------------------------------
+    # ========================================================
+    # 4. CLEAR
+    # ========================================================
 
-    sql_result = await generate_sql(
-        question=question
+    if intent_type != "CLEAR":
+
+        return {
+            "status": "error",
+            "question": question,
+            "reason": (
+                "Unable to determine the "
+                "intent of the question."
+            )
+        }
+
+    # ========================================================
+    # 5. Generate SQL
+    # ========================================================
+
+    try:
+
+        sql_result = await generate_sql(
+            question=question
+        )
+
+    except Exception as exc:
+
+        return {
+            "status": "sql_generation_failed",
+            "question": question,
+            "error": str(exc)
+        }
+
+    # --------------------------------------------------------
+    # Make sure SQL generation returned the expected structure
+    # --------------------------------------------------------
+
+    if not isinstance(
+        sql_result,
+        dict
+    ):
+
+        return {
+            "status": "sql_generation_failed",
+            "question": question,
+            "error": (
+                "SQL generator returned "
+                "an invalid response."
+            )
+        }
+
+    sql = sql_result.get(
+        "sql"
     )
 
-    sql = sql_result["sql"]
+    if not sql:
 
-    # ---------------------------------------------------------
-    # 4. Validate generated SQL
-    # ---------------------------------------------------------
+        return {
+            "status": "sql_generation_failed",
+            "question": question,
+            "error": (
+                "SQL generator did not "
+                "return SQL."
+            )
+        }
 
-    validation = await validate_sql(
-        sql
-    )
+    # ========================================================
+    # 6. Handle unsupported SQL generated by the model
+    # ========================================================
 
-    if not validation["valid"]:
+    if sql.strip().upper() == "UNSUPPORTED":
+
+        return {
+            "status": "unsupported",
+            "question": question,
+            "reason": (
+                "The database schema does not "
+                "contain enough information to "
+                "answer this question."
+            )
+        }
+
+    # ========================================================
+    # 7. Validate generated SQL
+    # ========================================================
+
+    try:
+
+        validation = await validate_sql(
+            sql
+        )
+
+    except Exception as exc:
+
+        return {
+            "status": "sql_validation_failed",
+            "question": question,
+            "sql": sql,
+            "error": str(exc)
+        }
+
+    # ========================================================
+    # 8. Reject invalid SQL
+    # ========================================================
+
+    if not validation.get(
+        "valid",
+        False
+    ):
 
         return {
             "status": "sql_rejected",
-            "reason": validation["reason"],
-            "sql": sql
+            "question": question,
+            "reason": validation.get(
+                "reason",
+                "SQL validation failed."
+            ),
+            "sql": sql,
+            "validation": validation
         }
 
-    # ---------------------------------------------------------
-    # 5. Execute validated SQL
-    # ---------------------------------------------------------
+    # ========================================================
+    # 9. Execute validated SQL
+    # ========================================================
 
-    execution = await execute_readonly_sql(
-        sql
-    )
+    try:
 
-    if not execution["success"]:
+        execution = await execute_readonly_sql(
+            sql
+        )
+
+    except Exception as exc:
 
         return {
             "status": "execution_failed",
+            "question": question,
             "sql": sql,
             "validation": validation,
-            "error": execution["error"]
+            "error": str(exc)
         }
 
-    # ---------------------------------------------------------
-    # 6. Generate natural-language answer
-    # ---------------------------------------------------------
-    answer = await generate_answer(
-        question=question,
-        sql=sql,
-        rows=execution["rows"]
-    )
+    # ========================================================
+    # 10. Handle execution failure
+    # ========================================================
 
+    if not execution.get(
+        "success",
+        False
+    ):
 
-    # ---------------------------------------------------------
-    # 7. Return final result
-    # ---------------------------------------------------------
-    
+        return {
+            "status": "execution_failed",
+            "question": question,
+            "sql": sql,
+            "validation": validation,
+            "error": execution.get(
+                "error",
+                "Database execution failed."
+            )
+        }
+
+    # ========================================================
+    # 11. Generate natural-language answer
+    # ========================================================
+
+    try:
+
+        answer = await generate_answer(
+            question=question,
+            sql=sql,
+            rows=execution.get(
+                "rows",
+                []
+            )
+        )
+
+    except Exception as exc:
+
+        return {
+            "status": "answer_generation_failed",
+            "question": question,
+            "sql": sql,
+            "validation": validation,
+            "row_count": execution.get(
+                "row_count",
+                0
+            ),
+            "rows": execution.get(
+                "rows",
+                []
+            ),
+            "error": str(exc)
+        }
+
+    # ========================================================
+    # 12. Return final result
+    # ========================================================
+
     return {
         "status": "query_executed",
         "question": question,
         "sql": sql,
         "validation": validation,
-        "row_count": execution["row_count"],
-        "rows": execution["rows"],
+        "row_count": execution.get(
+            "row_count",
+            0
+        ),
+        "rows": execution.get(
+            "rows",
+            []
+        ),
         "answer": answer,
-        "retrieved_schema": sql_result[
-            "retrieved_schema"
-        ]
+        "retrieved_schema": sql_result.get(
+            "retrieved_schema",
+            []
+        )
     }
 
+
+# ============================================================
+# PROCESS CLARIFICATION
+# ============================================================
 
 async def process_clarification(
     conversation_id: str,
@@ -171,9 +363,9 @@ async def process_clarification(
     a clarification question.
     """
 
-    # ---------------------------------------------------------
+    # ========================================================
     # 1. Retrieve conversation
-    # ---------------------------------------------------------
+    # ========================================================
 
     conversation = get_conversation(
         conversation_id
@@ -186,55 +378,171 @@ async def process_clarification(
             "reason": "Conversation not found."
         }
 
-    # ---------------------------------------------------------
+    # ========================================================
     # 2. Check conversation state
-    # ---------------------------------------------------------
+    # ========================================================
 
-    if conversation["status"] != "awaiting_clarification":
+    if conversation.get(
+        "status"
+    ) != "awaiting_clarification":
 
         return {
             "status": "error",
             "reason": (
-                "Conversation is not awaiting clarification."
+                "Conversation is not awaiting "
+                "clarification."
             )
         }
 
-    # ---------------------------------------------------------
+    # ========================================================
     # 3. Get original question
-    # ---------------------------------------------------------
+    # ========================================================
 
-    original_question = conversation[
+    original_question = conversation.get(
         "original_question"
-    ]
+    )
 
-    # ---------------------------------------------------------
+    if not original_question:
+
+        return {
+            "status": "error",
+            "reason": (
+                "Original question was not "
+                "found in the conversation."
+            )
+        }
+
+    # ========================================================
     # 4. Combine original question + clarification
-    # ---------------------------------------------------------
+    # ========================================================
 
     clarified_question = (
         f"{original_question}\n\n"
         f"User clarification: {answer}"
     )
 
-    # ---------------------------------------------------------
-    # 5. Generate SQL using clarified question
-    # ---------------------------------------------------------
+    # ========================================================
+    # 5. Generate SQL
+    # ========================================================
 
-    sql_result = await generate_sql(
-        question=clarified_question
+    try:
+
+        sql_result = await generate_sql(
+            question=clarified_question
+        )
+
+    except Exception as exc:
+
+        update_conversation(
+            conversation_id,
+            clarification=answer,
+            status="sql_generation_failed"
+        )
+
+        return {
+            "status": "sql_generation_failed",
+            "conversation_id": conversation_id,
+            "error": str(exc)
+        }
+
+    if not isinstance(
+        sql_result,
+        dict
+    ):
+
+        update_conversation(
+            conversation_id,
+            clarification=answer,
+            status="sql_generation_failed"
+        )
+
+        return {
+            "status": "sql_generation_failed",
+            "conversation_id": conversation_id,
+            "error": (
+                "SQL generator returned "
+                "an invalid response."
+            )
+        }
+
+    sql = sql_result.get(
+        "sql"
     )
 
-    sql = sql_result["sql"]
+    if not sql:
 
-    # ---------------------------------------------------------
-    # 6. Validate generated SQL
-    # ---------------------------------------------------------
+        update_conversation(
+            conversation_id,
+            clarification=answer,
+            status="sql_generation_failed"
+        )
 
-    validation = await validate_sql(
-        sql
-    )
+        return {
+            "status": "sql_generation_failed",
+            "conversation_id": conversation_id,
+            "error": (
+                "SQL generator did not "
+                "return SQL."
+            )
+        }
 
-    if not validation["valid"]:
+    # ========================================================
+    # 6. Handle unsupported SQL
+    # ========================================================
+
+    if sql.strip().upper() == "UNSUPPORTED":
+
+        update_conversation(
+            conversation_id,
+            clarification=answer,
+            status="unsupported",
+            generated_sql=sql
+        )
+
+        return {
+            "status": "unsupported",
+            "conversation_id": conversation_id,
+            "reason": (
+                "The database schema does not "
+                "contain enough information to "
+                "answer this question."
+            )
+        }
+
+    # ========================================================
+    # 7. Validate generated SQL
+    # ========================================================
+
+    try:
+
+        validation = await validate_sql(
+            sql
+        )
+
+    except Exception as exc:
+
+        update_conversation(
+            conversation_id,
+            clarification=answer,
+            status="sql_validation_failed",
+            generated_sql=sql
+        )
+
+        return {
+            "status": "sql_validation_failed",
+            "conversation_id": conversation_id,
+            "sql": sql,
+            "error": str(exc)
+        }
+
+    # ========================================================
+    # 8. Reject invalid SQL
+    # ========================================================
+
+    if not validation.get(
+        "valid",
+        False
+    ):
 
         update_conversation(
             conversation_id,
@@ -246,19 +554,25 @@ async def process_clarification(
         return {
             "status": "sql_rejected",
             "conversation_id": conversation_id,
-            "reason": validation["reason"],
-            "sql": sql
+            "reason": validation.get(
+                "reason",
+                "SQL validation failed."
+            ),
+            "sql": sql,
+            "validation": validation
         }
 
-    # ---------------------------------------------------------
-    # 7. Execute validated SQL
-    # ---------------------------------------------------------
+    # ========================================================
+    # 9. Execute validated SQL
+    # ========================================================
 
-    execution = await execute_readonly_sql(
-        sql
-    )
+    try:
 
-    if not execution["success"]:
+        execution = await execute_readonly_sql(
+            sql
+        )
+
+    except Exception as exc:
 
         update_conversation(
             conversation_id,
@@ -272,48 +586,99 @@ async def process_clarification(
             "conversation_id": conversation_id,
             "sql": sql,
             "validation": validation,
-            "error": execution["error"]
+            "error": str(exc)
         }
 
-    # ---------------------------------------------------------
-    # 8. Update conversation state
-    # ---------------------------------------------------------
+    # ========================================================
+    # 10. Handle execution failure
+    # ========================================================
 
-    update_conversation(
-        conversation_id,
-        clarification=answer,
-        status="query_executed",
-        generated_sql=sql,
-        rows=execution["rows"]
-    )
+    if not execution.get(
+        "success",
+        False
+    ):
 
-    # ---------------------------------------------------------
-    # 9.  Generate natural-language answer
-    # ---------------------------------------------------------
+        update_conversation(
+            conversation_id,
+            clarification=answer,
+            status="execution_failed",
+            generated_sql=sql
+        )
 
-    final_answer = await generate_answer(
-        question=clarified_question,
-        sql=sql,
-        rows=execution["rows"]
-    )
+        return {
+            "status": "execution_failed",
+            "conversation_id": conversation_id,
+            "sql": sql,
+            "validation": validation,
+            "error": execution.get(
+                "error",
+                "Database execution failed."
+            )
+        }
 
+    # ========================================================
+    # 11. Generate final answer
+    # ========================================================
 
-    # ---------------------------------------------------------
-    # 10. Update conversation
-    # ---------------------------------------------------------
+    try:
+
+        final_answer = await generate_answer(
+            question=clarified_question,
+            sql=sql,
+            rows=execution.get(
+                "rows",
+                []
+            )
+        )
+
+    except Exception as exc:
+
+        update_conversation(
+            conversation_id,
+            clarification=answer,
+            status="answer_generation_failed",
+            generated_sql=sql,
+            rows=execution.get(
+                "rows",
+                []
+            )
+        )
+
+        return {
+            "status": "answer_generation_failed",
+            "conversation_id": conversation_id,
+            "sql": sql,
+            "validation": validation,
+            "row_count": execution.get(
+                "row_count",
+                0
+            ),
+            "rows": execution.get(
+                "rows",
+                []
+            ),
+            "error": str(exc)
+        }
+
+    # ========================================================
+    # 12. Update conversation
+    # ========================================================
 
     update_conversation(
         conversation_id,
         clarification=answer,
         status="completed",
         generated_sql=sql,
-        rows=execution["rows"],
+        rows=execution.get(
+            "rows",
+            []
+        ),
         final_answer=final_answer
     )
 
-    # ---------------------------------------------------------
-    # 11. Return final result
-    # ---------------------------------------------------------
+    # ========================================================
+    # 13. Return final result
+    # ========================================================
 
     return {
         "status": "completed",
@@ -322,10 +687,17 @@ async def process_clarification(
         "clarification": answer,
         "sql": sql,
         "validation": validation,
-        "row_count": execution["row_count"],
-        "rows": execution["rows"],
+        "row_count": execution.get(
+            "row_count",
+            0
+        ),
+        "rows": execution.get(
+            "rows",
+            []
+        ),
         "answer": final_answer,
-        "retrieved_schema": sql_result[
-            "retrieved_schema"
-        ]
+        "retrieved_schema": sql_result.get(
+            "retrieved_schema",
+            []
+        )
     }

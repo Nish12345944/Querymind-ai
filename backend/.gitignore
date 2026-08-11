@@ -1,6 +1,7 @@
 # Python
 __pycache__/
 *.py[cod]
+*.pyo
 
 # Virtual environments
 venv/
@@ -12,8 +13,10 @@ env/
 .env.*
 !.env.example
 
-# ChromaDB
+# ChromaDB / vector stores
 vector_store/
+chroma/
+.chroma/
 
 # IDE
 .vscode/
@@ -32,3 +35,4 @@ node_modules/
 # Build files
 dist/
 build/
+*.egg-info/

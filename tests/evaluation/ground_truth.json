@@ -1,0 +1,46 @@
+[
+  {
+    "id": "Q001",
+    "sql": "SELECT p.product_name, SUM(oi.quantity * oi.unit_price * (1 - COALESCE(oi.discount, 0))) AS revenue FROM order_items oi JOIN products p ON oi.product_id = p.product_id JOIN orders o ON oi.order_id = o.order_id GROUP BY p.product_id, p.product_name ORDER BY revenue DESC LIMIT 5"
+  },
+  {
+    "id": "Q002",
+    "sql": "SELECT COUNT(*) AS customer_count FROM customers"
+  },
+  {
+    "id": "Q003",
+    "sql": "SELECT COUNT(*) AS order_count FROM orders"
+  },
+  {
+    "id": "Q004",
+    "sql": "SELECT SUM(total_amount) AS total_revenue FROM orders"
+  },
+  {
+    "id": "Q005",
+    "sql": "SELECT AVG(unit_price) AS average_product_price FROM products"
+  },
+  {
+    "id": "Q006",
+    "sql": "SELECT p.product_name, c.category_name FROM products p JOIN categories c ON p.category_id = c.category_id ORDER BY c.category_name, p.product_name"
+  },
+  {
+    "id": "Q007",
+    "sql": "SELECT o.order_id, c.first_name, c.last_name FROM orders o JOIN customers c ON o.customer_id = c.customer_id ORDER BY o.order_id"
+  },
+  {
+    "id": "Q008",
+    "sql": "SELECT s.store_name, r.region_name FROM stores s JOIN regions r ON s.region_id = r.region_id ORDER BY r.region_name, s.store_name"
+  },
+  {
+    "id": "Q009",
+    "sql": "SELECT COUNT(*) AS order_count FROM orders WHERE order_date >= '2025-01-01' AND order_date < '2026-01-01'"
+  },
+  {
+    "id": "Q010",
+    "sql": "SELECT SUM(total_amount) AS revenue FROM orders WHERE order_date >= '2025-01-01' AND order_date < '2026-01-01'"
+  },
+  {
+    "id": "Q020",
+    "sql": "SELECT * FROM products LIMIT 100"
+  }
+]

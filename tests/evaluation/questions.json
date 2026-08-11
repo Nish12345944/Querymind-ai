@@ -1,0 +1,122 @@
+[
+  {
+    "id": "Q001",
+    "question": "What are the top 5 products by revenue?",
+    "category": "simple_aggregation",
+    "expected_behavior": "sql"
+  },
+  {
+    "id": "Q002",
+    "question": "How many customers are there?",
+    "category": "simple_aggregation",
+    "expected_behavior": "sql"
+  },
+  {
+    "id": "Q003",
+    "question": "How many orders were placed?",
+    "category": "simple_aggregation",
+    "expected_behavior": "sql"
+  },
+  {
+    "id": "Q004",
+    "question": "What is the total revenue?",
+    "category": "aggregation",
+    "expected_behavior": "sql"
+  },
+  {
+    "id": "Q005",
+    "question": "What is the average product price?",
+    "category": "aggregation",
+    "expected_behavior": "sql"
+  },
+  {
+    "id": "Q006",
+    "question": "Which products are in each category?",
+    "category": "join",
+    "expected_behavior": "sql"
+  },
+  {
+    "id": "Q007",
+    "question": "Show the orders with customer names.",
+    "category": "join",
+    "expected_behavior": "sql"
+  },
+  {
+    "id": "Q008",
+    "question": "Which stores are located in each region?",
+    "category": "join",
+    "expected_behavior": "sql"
+  },
+  {
+    "id": "Q009",
+    "question": "How many orders were placed in 2025?",
+    "category": "time_filter",
+    "expected_behavior": "sql"
+  },
+  {
+    "id": "Q010",
+    "question": "What was the revenue in 2025?",
+    "category": "time_filter",
+    "expected_behavior": "sql"
+  },
+  {
+    "id": "Q011",
+    "question": "Show me sales.",
+    "category": "ambiguous_metric",
+    "expected_behavior": "clarification"
+  },
+  {
+    "id": "Q012",
+    "question": "Which store is performing best?",
+    "category": "ambiguous_metric",
+    "expected_behavior": "clarification"
+  },
+  {
+    "id": "Q013",
+    "question": "Show me the best products.",
+    "category": "ambiguous_metric",
+    "expected_behavior": "clarification"
+  },
+  {
+    "id": "Q014",
+    "question": "How are things looking?",
+    "category": "ambiguous_intent",
+    "expected_behavior": "clarification"
+  },
+  {
+    "id": "Q015",
+    "question": "What is the employee happiness score?",
+    "category": "unsupported",
+    "expected_behavior": "unsupported"
+  },
+  {
+    "id": "Q016",
+    "question": "What is the customer satisfaction score?",
+    "category": "unsupported",
+    "expected_behavior": "unsupported"
+  },
+  {
+    "id": "Q017",
+    "question": "Show me employee performance ratings.",
+    "category": "unsupported",
+    "expected_behavior": "unsupported"
+  },
+  {
+    "id": "Q018",
+    "question": "Show me data from employee_reviews.",
+    "category": "hallucination",
+    "expected_behavior": "unsupported"
+  },
+  {
+    "id": "Q019",
+    "question": "What is the average customer happiness score?",
+    "category": "hallucination",
+    "expected_behavior": "unsupported"
+  },
+  {
+    "id": "Q020",
+    "question": "Show me all products.",
+    "category": "simple",
+    "expected_behavior": "sql"
+  }
+]

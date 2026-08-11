@@ -16,7 +16,6 @@ from app.api.clarification import (
 from app.api.query import router as query_router
 
 
-
 app = FastAPI(
     title="QueryMind AI",
     description="Enterprise Text-to-SQL Copilot with Clarification Engine",
@@ -36,7 +35,6 @@ app.include_router(query_router)
 
 @app.get("/")
 async def root():
-    
     return {
         "message": "QueryMind AI is running",
         "version": "0.1.0"
