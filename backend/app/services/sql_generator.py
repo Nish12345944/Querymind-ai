@@ -359,6 +359,62 @@ Therefore product revenue normally requires:
 products
 JOIN order_items
 
+# ============================================================
+# PRODUCT SALES RULES
+# ============================================================
+
+Product sales means sales of products through customer
+transactions, NOT the number of products in the catalog.
+
+For product sales questions such as:
+
+"Show me product sales."
+"Show product sales."
+"Which products sold the most?"
+"How many units of each product were sold?"
+"Show me sales by product."
+
+Use order_items as the transaction source.
+
+When returning product-level sales, aggregate by product.
+
+Expected structure:
+
+SELECT
+    p.product_name,
+    SUM(oi.quantity) AS units_sold,
+    SUM(
+        oi.quantity
+        * oi.unit_price
+        * (1 - COALESCE(oi.discount, 0))
+    ) AS revenue
+FROM products p
+JOIN order_items oi
+    ON p.product_id = oi.product_id
+GROUP BY
+    p.product_id,
+    p.product_name
+ORDER BY revenue DESC
+
+Important:
+
+1. Do NOT simply SELECT rows from order_items.
+2. Do NOT COUNT rows from products.
+3. Do NOT interpret "product sales" as the product catalog.
+4. Use SUM(oi.quantity) for units sold.
+5. Use transaction-level oi.unit_price.
+6. Apply oi.discount.
+7. Use products.product_name when displaying product names.
+8. GROUP BY product identity and product name.
+9. When no explicit number of products is requested, do not add
+   an arbitrary LIMIT to the aggregation.
+10. If the user asks for "top N", use ORDER BY revenue DESC
+    and LIMIT N.
+11. If the user asks only for units sold, the revenue column
+    is not required.
+12. If the user asks for sales/revenue by product, include
+    the aggregated revenue.
+
 ============================================================
 TOP / RANKING RULES
 ============================================================
@@ -593,6 +649,11 @@ Before returning the SQL, internally verify:
 17. Date filters use complete calendar ranges.
 18. GROUP BY is valid.
 19. The query directly answers the question.
+20. Product sales use order_items as the transaction source.
+21. Product sales are aggregated by product when product-level
+    results are requested.
+22. Product units sold use SUM(order_items.quantity).
+23. Product revenue uses transaction-level price and discount.
 
 Return ONLY SQL or UNSUPPORTED.
 """

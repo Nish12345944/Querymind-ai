@@ -2,8 +2,10 @@ from app.services.schema_service import get_database_schema
 
 
 TABLE_DESCRIPTIONS = {
-    "categories": "Contains product categories used to group products.",
-    
+    "categories": (
+        "Contains product categories used to group products."
+    ),
+
     "customers": (
         "Contains customer information including location, "
         "registration date, and customer segment."
@@ -87,7 +89,11 @@ async def build_schema_documents():
 
         for column in table_info["columns"]:
 
-            nullable = "nullable" if column["nullable"] else "required"
+            nullable = (
+                "nullable"
+                if column["nullable"]
+                else "required"
+            )
 
             lines.append(
                 f"- {column['name']} "
@@ -110,7 +116,7 @@ async def build_schema_documents():
             for foreign_key in table_info["foreign_keys"]:
 
                 lines.append(
-                    f"- {foreign_key['column']} → "
+                    f"- {foreign_key['column']} -> "
                     f"{foreign_key['references_table']}."
                     f"{foreign_key['references_column']}"
                 )

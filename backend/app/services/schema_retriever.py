@@ -9,56 +9,28 @@ from app.services.vector_store import (
 )
 
 
-# ============================================================
-# Configuration
-# ============================================================
-
 DEFAULT_TOP_K = 7
 MAX_TOP_K = 15
 
-
-# ============================================================
-# Retrieve relevant schema
-# ============================================================
 
 def retrieve_relevant_schema(
     question: str,
     top_k: int = DEFAULT_TOP_K
 ) -> list[dict[str, Any]]:
-    """
-    Retrieve the most relevant database schema documents
-    for a natural-language question.
-
-    The function is intentionally synchronous because the
-    current embedding and vector-store implementations are
-    synchronous.
-    """
 
     question = question.strip()
 
     if not question:
         return []
 
-    # --------------------------------------------------------
-    # Protect against unreasonable top_k values
-    # --------------------------------------------------------
-
     top_k = max(
         1,
         min(top_k, MAX_TOP_K)
     )
 
-    # --------------------------------------------------------
-    # Generate query embedding
-    # --------------------------------------------------------
-
     query_embedding = generate_embeddings(
         [question]
     )[0]
-
-    # --------------------------------------------------------
-    # Search vector store
-    # --------------------------------------------------------
 
     results = search_schema(
         query_embedding,
@@ -67,10 +39,6 @@ def retrieve_relevant_schema(
 
     if not results:
         return []
-
-    # --------------------------------------------------------
-    # Safely extract vector-store results
-    # --------------------------------------------------------
 
     documents = results.get(
         "documents",
@@ -105,10 +73,6 @@ def retrieve_relevant_schema(
         else []
     )
 
-    # --------------------------------------------------------
-    # Build normalized result
-    # --------------------------------------------------------
-
     results_list: list[dict[str, Any]] = []
 
     for index, document in enumerate(
@@ -130,16 +94,12 @@ def retrieve_relevant_schema(
         if not isinstance(metadata, dict):
             metadata = {}
 
-        table_name = metadata.get(
-            "table_name"
-        )
-
-        results_list.append(
-            {
-                "table_name": table_name,
-                "distance": distance,
-                "document": document
-            }
-        )
+        results_list.append({
+            "table_name": metadata.get(
+                "table_name"
+            ),
+            "distance": distance,
+            "document": document
+        })
 
     return results_list

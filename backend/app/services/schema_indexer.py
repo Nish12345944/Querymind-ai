@@ -15,12 +15,19 @@ async def index_database_schema():
 
     documents = await build_schema_documents()
 
+    if not documents:
+        return {
+            "indexed_documents": 0
+        }
+
     texts = [
         document["content"]
         for document in documents
     ]
 
-    embeddings = generate_embeddings(texts)
+    embeddings = generate_embeddings(
+        texts
+    )
 
     add_schema_documents(
         documents,

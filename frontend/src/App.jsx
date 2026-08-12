@@ -1,411 +1,1374 @@
-import { useState } from "react";
+import "./App.css";
+
+import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
+
 import {
   Database,
+  History,
   Send,
   Loader2,
-  ChevronDown,
-  ChevronUp,
-  AlertCircle,
-  CheckCircle2,
-  MessageCircleQuestion,
+  ChevronRight,
+  X,
+  Copy,
+  Check,
+  BarChart3,
 } from "lucide-react";
-import "./App.css";
+
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+} from "recharts";
+
 
 const API_BASE_URL = "http://127.0.0.1:8000";
 
+
 function App() {
+
+  // ============================================================
+  // QUERY STATE
+  // ============================================================
+
   const [question, setQuestion] = useState("");
-  const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [showSql, setShowSql] = useState(false);
-  const [error, setError] = useState("");
 
-  const [clarificationAnswer, setClarificationAnswer] = useState("");
-  const [clarifying, setClarifying] = useState(false);
+  const [response, setResponse] = useState(null);
 
-  const submitQuestion = async (event) => {
-    event?.preventDefault();
+  const [conversationId, setConversationId] = useState(null);
+  const [clarification, setClarification] = useState(null);
+  const [options, setOptions] = useState([]);
+
+  // ============================================================
+  // HISTORY STATE
+  // ============================================================
+
+  const [history, setHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  const [selectedHistory, setSelectedHistory] = useState(null);
+
+  // ============================================================
+  // UI STATE
+  // ============================================================
+
+  const [copied, setCopied] = useState(false);
+  const [sqlOpen, setSqlOpen] = useState(false);
+
+
+  // ============================================================
+  // LOAD QUERY HISTORY
+  // ============================================================
+
+  const loadHistory = async () => {
+
+    try {
+
+      setHistoryLoading(true);
+
+      const result = await axios.get(
+        `${API_BASE_URL}/query/history?limit=20`
+      );
+
+      setHistory(result.data.items || []);
+
+    } catch (error) {
+
+      console.error(
+        "Failed to load query history:",
+        error
+      );
+
+    } finally {
+
+      setHistoryLoading(false);
+
+    }
+  };
+
+
+  useEffect(() => {
+    loadHistory();
+  }, []);
+
+
+  // ============================================================
+  // RESET QUERY STATE
+  // ============================================================
+
+  const resetQueryState = () => {
+
+    setResponse(null);
+    setConversationId(null);
+    setClarification(null);
+    setOptions([]);
+    setSelectedHistory(null);
+    setCopied(false);
+    setSqlOpen(false);
+
+  };
+
+
+  // ============================================================
+  // SUBMIT QUERY
+  // ============================================================
+
+  const submitQuery = async () => {
 
     const trimmedQuestion = question.trim();
 
-    if (!trimmedQuestion) {
-      setError("Please enter a question.");
+    if (!trimmedQuestion || loading) {
       return;
     }
 
     setLoading(true);
-    setError("");
-    setResult(null);
-    setShowSql(false);
+
+    resetQueryState();
 
     try {
-      const response = await axios.post(
+
+      const result = await axios.post(
         `${API_BASE_URL}/query/`,
         {
           question: trimmedQuestion,
         }
       );
 
-      setResult(response.data);
-    } catch (err) {
-      console.error(err);
+      const data = result.data;
 
-      setError(
-        err.response?.data?.detail ||
-          "Unable to connect to QueryMind API. Make sure the FastAPI server is running."
+      setResponse(data);
+
+      if (data.status === "clarification_required") {
+
+        setConversationId(
+          data.conversation_id
+        );
+
+        setClarification(
+          data.question ||
+          data.clarification
+        );
+
+        setOptions(
+          data.options || []
+        );
+
+      }
+
+      await loadHistory();
+
+    } catch (error) {
+
+      console.error(
+        "Query failed:",
+        error
       );
+
+      setResponse({
+        status: "error",
+        error:
+          error.response?.data?.detail ||
+          error.response?.data?.error ||
+          "Unable to process the query.",
+      });
+
     } finally {
+
       setLoading(false);
+
     }
   };
 
-  const submitClarification = async (event) => {
-    event?.preventDefault();
 
-    if (!clarificationAnswer.trim()) {
+  // ============================================================
+  // SUBMIT CLARIFICATION
+  // ============================================================
+
+  const submitClarification = async (answer) => {
+
+    if (
+      !conversationId ||
+      loading ||
+      !answer?.trim()
+    ) {
       return;
     }
 
-    if (!result?.conversation_id) {
-      setError("Conversation ID is missing.");
-      return;
-    }
-
-    setClarifying(true);
-    setError("");
+    setLoading(true);
 
     try {
-      const response = await axios.post(
+
+      const result = await axios.post(
         `${API_BASE_URL}/query/clarify`,
         {
-          conversation_id: result.conversation_id,
-          answer: clarificationAnswer.trim(),
+          conversation_id: conversationId,
+          answer: answer.trim(),
         }
       );
 
-      setResult(response.data);
-      setClarificationAnswer("");
-    } catch (err) {
-      console.error(err);
+      const data = result.data;
 
-      setError(
-        err.response?.data?.detail ||
-          "Unable to continue the clarification."
+      setResponse(data);
+
+      setClarification(null);
+      setOptions([]);
+      setConversationId(null);
+
+      setSqlOpen(false);
+
+      await loadHistory();
+
+    } catch (error) {
+
+      console.error(
+        "Clarification failed:",
+        error
       );
+
+      setResponse({
+        status: "error",
+        error:
+          error.response?.data?.detail ||
+          error.response?.data?.error ||
+          "Unable to process the clarification.",
+      });
+
     } finally {
-      setClarifying(false);
+
+      setLoading(false);
+
     }
   };
 
-  const renderResult = () => {
-    if (!result) {
+
+  // ============================================================
+  // HISTORY ITEM
+  // ============================================================
+
+  const openHistory = (item) => {
+
+    setSelectedHistory(item);
+
+    if (
+      item.question ||
+      item.original_question
+    ) {
+
+      setQuestion(
+        item.question ||
+        item.original_question ||
+        ""
+      );
+
+    }
+
+    // If the history API already returns the
+    // complete result, display it immediately.
+    if (
+      item.answer ||
+      item.sql ||
+      item.rows
+    ) {
+
+      setResponse({
+        ...item,
+        status:
+          item.status ||
+          "query_executed",
+      });
+
+      setClarification(null);
+      setOptions([]);
+      setConversationId(null);
+      setSqlOpen(false);
+
+    }
+
+  };
+
+
+  // ============================================================
+  // COPY SQL
+  // ============================================================
+
+  const copySql = async (sql) => {
+
+    if (!sql) {
+      return;
+    }
+
+    try {
+
+      await navigator.clipboard.writeText(sql);
+
+      setCopied(true);
+
+      setTimeout(() => {
+        setCopied(false);
+      }, 1500);
+
+    } catch (error) {
+
+      console.error(
+        "Failed to copy SQL:",
+        error
+      );
+
+    }
+  };
+
+
+  // ============================================================
+  // FORMAT DATE
+  // ============================================================
+
+  const formatDate = (value) => {
+
+    if (!value) {
+      return "";
+    }
+
+    try {
+
+      return new Date(value).toLocaleString();
+
+    } catch {
+
+      return value;
+
+    }
+  };
+
+
+  // ============================================================
+  // STATUS LABEL
+  // ============================================================
+
+  const getStatusLabel = (status) => {
+
+    switch (status) {
+
+      case "completed":
+        return "Completed";
+
+      case "query_executed":
+        return "Executed";
+
+      case "clarification_required":
+        return "Clarification";
+
+      case "unsupported":
+        return "Unsupported";
+
+      case "error":
+        return "Error";
+
+      default:
+        return status || "Unknown";
+
+    }
+  };
+
+
+  // ============================================================
+  // SUCCESS RESULT
+  // ============================================================
+
+  const isSuccessfulResult =
+    response &&
+    (
+      response.status === "completed" ||
+      response.status === "query_executed"
+    );
+
+
+  // ============================================================
+  // CHART DATA
+  // ============================================================
+
+  const chartConfig = useMemo(() => {
+
+    if (
+      !response?.rows ||
+      response.rows.length === 0
+    ) {
       return null;
     }
 
-    if (result.status === "clarification_required") {
-      return (
-        <section className="result-card clarification-card">
-          <div className="result-header">
-            <div className="result-title">
-              <MessageCircleQuestion size={22} />
-              <div>
-                <h2>Clarification required</h2>
-                <p>QueryMind needs a little more information.</p>
-              </div>
-            </div>
+    const rows = response.rows;
 
-            <span className="status-badge clarification">
-              Clarification
-            </span>
-          </div>
+    const firstRow = rows[0];
 
-          <div className="clarification-content">
-            <p className="clarification-question">
-              {result.question ||
-                result.clarification ||
-                result.reason ||
-                "Please clarify your request."}
-            </p>
+    const columns = Object.keys(firstRow);
 
-            {result.options?.length > 0 && (
-              <div className="clarification-options">
-                {result.options.map((option, index) => (
-                  <button
-                    key={index}
-                    className="option-button"
-                    onClick={() =>
-                      setClarificationAnswer(
-                        option.label || option.description || ""
-                      )
-                    }
-                  >
-                    <strong>{option.label}</strong>
-
-                    {option.description && (
-                      <span>{option.description}</span>
-                    )}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            <form
-              className="clarification-form"
-              onSubmit={submitClarification}
-            >
-              <input
-                type="text"
-                value={clarificationAnswer}
-                onChange={(event) =>
-                  setClarificationAnswer(event.target.value)
-                }
-                placeholder="Type your clarification..."
-                disabled={clarifying}
-              />
-
-              <button
-                type="submit"
-                disabled={
-                  clarifying || !clarificationAnswer.trim()
-                }
-              >
-                {clarifying ? (
-                  <Loader2 className="spin" size={18} />
-                ) : (
-                  <Send size={18} />
-                )}
-
-                Continue
-              </button>
-            </form>
-          </div>
-        </section>
+    const labelColumn =
+      columns.find((column) =>
+        [
+          "product_name",
+          "category_name",
+          "store_name",
+          "region_name",
+          "customer_name",
+          "month",
+          "date",
+          "order_date",
+        ].includes(column)
+      ) ||
+      columns.find(
+        (column) =>
+          typeof firstRow[column] === "string"
       );
+
+    if (!labelColumn) {
+      return null;
     }
 
-    if (result.status === "unsupported") {
-      return (
-        <section className="result-card error-card">
-          <div className="result-header">
-            <div className="result-title">
-              <AlertCircle size={22} />
-              <div>
-                <h2>Unsupported query</h2>
-                <p>QueryMind cannot answer this request.</p>
-              </div>
-            </div>
-
-            <span className="status-badge unsupported">
-              Unsupported
-            </span>
-          </div>
-
-          <p className="reason-text">
-            {result.reason ||
-              "The requested information is not available in the database."}
-          </p>
-        </section>
+    const numericColumns =
+      columns.filter(
+        (column) =>
+          column !== labelColumn &&
+          rows.some(
+            (row) =>
+              typeof row[column] === "number"
+          )
       );
+
+    if (numericColumns.length === 0) {
+      return null;
     }
 
-    if (result.status !== "query_executed") {
-      return (
-        <section className="result-card error-card">
-          <div className="result-header">
-            <div className="result-title">
-              <AlertCircle size={22} />
-              <div>
-                <h2>Query failed</h2>
-                <p>QueryMind could not complete the request.</p>
-              </div>
-            </div>
-          </div>
+    const valueColumn =
+      numericColumns.find(
+        (column) =>
+          column === "revenue"
+      ) ||
+      numericColumns.find(
+        (column) =>
+          column === "total_revenue"
+      ) ||
+      numericColumns.find(
+        (column) =>
+          column === "units_sold"
+      ) ||
+      numericColumns.find(
+        (column) =>
+          column === "quantity"
+      ) ||
+      numericColumns[0];
 
-          <p className="reason-text">
-            {result.error ||
-              result.reason ||
-              "An unexpected error occurred."}
-          </p>
-        </section>
-      );
-    }
+    const chartRows =
+      rows
+        .map((row) => ({
+          label: String(
+            row[labelColumn] ?? ""
+          ),
+          value:
+            Number(row[valueColumn]) || 0,
+        }))
+        .slice(0, 20);
 
-    const rows = result.rows || [];
+    return {
+      labelColumn,
+      valueColumn,
+      data: chartRows,
+    };
 
-    return (
-      <section className="result-card">
-        <div className="result-header">
-          <div className="result-title">
-            <CheckCircle2 size={22} />
-            <div>
-              <h2>Query executed</h2>
-              <p>
-                {result.row_count ?? rows.length} result
-                {result.row_count === 1 ? "" : "s"} returned.
-              </p>
-            </div>
-          </div>
+  }, [response]);
 
-          <span className="status-badge success">
-            Success
-          </span>
-        </div>
 
-        {result.answer && (
-          <div className="answer-box">
-            <span className="answer-label">Answer</span>
-            <p>{result.answer}</p>
-          </div>
-        )}
-
-        {rows.length > 0 && (
-          <div className="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  {Object.keys(rows[0]).map((column) => (
-                    <th key={column}>{column}</th>
-                  ))}
-                </tr>
-              </thead>
-
-              <tbody>
-                {rows.map((row, rowIndex) => (
-                  <tr key={rowIndex}>
-                    {Object.keys(rows[0]).map((column) => (
-                      <td key={column}>
-                        {String(row[column] ?? "")}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {result.sql && (
-          <div className="sql-section">
-            <button
-              className="sql-toggle"
-              onClick={() => setShowSql(!showSql)}
-            >
-              <span>
-                <Database size={17} />
-                Generated SQL
-              </span>
-
-              {showSql ? (
-                <ChevronUp size={18} />
-              ) : (
-                <ChevronDown size={18} />
-              )}
-            </button>
-
-            {showSql && (
-              <pre className="sql-code">
-                <code>{result.sql}</code>
-              </pre>
-            )}
-          </div>
-        )}
-      </section>
-    );
-  };
+  // ============================================================
+  // RENDER
+  // ============================================================
 
   return (
+
     <div className="app">
+
+      {/* ======================================================
+          TOPBAR
+      ====================================================== */}
+
       <header className="topbar">
+
         <div className="brand">
+
           <div className="brand-icon">
-            <Database size={22} />
+            <Database size={21} />
           </div>
 
           <div>
-            <h1>QueryMind AI</h1>
-            <span>Enterprise Text-to-SQL Copilot</span>
+            <h1>QueryMind</h1>
+            <span>AI DATA COPILOT</span>
           </div>
+
         </div>
+
 
         <div className="connection-status">
+
           <span className="status-dot" />
-          API Ready
+
+          Database connected
+
         </div>
+
       </header>
 
-      <main className="main-content">
-        <section className="hero">
-          <span className="eyebrow">AI DATABASE COPILOT</span>
 
-          <h2>
-            Ask your database
-            <br />
-            <span>anything.</span>
-          </h2>
+      {/* ======================================================
+          WORKSPACE
+      ====================================================== */}
 
-          <p>
-            QueryMind converts natural-language questions into
-            validated SQL, executes them safely, and explains
-            the results.
-          </p>
-        </section>
+      <div className="workspace">
 
-        <form className="query-form" onSubmit={submitQuestion}>
-          <div className="input-container">
-            <textarea
-              value={question}
-              onChange={(event) => setQuestion(event.target.value)}
-              placeholder="Ask a question about your database..."
-              rows={3}
-              disabled={loading}
-              onKeyDown={(event) => {
-                if (
-                  event.key === "Enter" &&
-                  !event.shiftKey
-                ) {
-                  event.preventDefault();
-                  submitQuestion(event);
+
+        {/* ====================================================
+            HISTORY SIDEBAR
+        ==================================================== */}
+
+        <aside className="history-sidebar">
+
+          <div className="history-heading">
+
+            <History size={15} />
+
+            <span>
+              QUERY HISTORY
+            </span>
+
+          </div>
+
+
+          {historyLoading ? (
+
+            <div className="history-empty">
+              Loading history...
+            </div>
+
+          ) : history.length === 0 ? (
+
+            <div className="history-empty">
+              No queries yet.
+            </div>
+
+          ) : (
+
+            <div className="history-list">
+
+              {history.map(
+                (item, index) => {
+
+                  const historyQuestion =
+                    item.question ||
+                    item.original_question ||
+                    "Untitled query";
+
+                  const historyStatus =
+                    item.status ||
+                    "unknown";
+
+                  return (
+
+                    <button
+                      key={
+                        item.id ||
+                        item.history_id ||
+                        item.conversation_id ||
+                        index
+                      }
+                      className="history-item"
+                      onClick={() =>
+                        openHistory(item)
+                      }
+                    >
+
+                      <div className="history-question">
+
+                        {historyQuestion}
+
+                      </div>
+
+
+                      <div className="history-meta">
+
+                        <span
+                          className={
+                            `history-status ${historyStatus}`
+                          }
+                        >
+                          {getStatusLabel(
+                            historyStatus
+                          )}
+                        </span>
+
+
+                        <span className="history-arrow">
+
+                          <ChevronRight
+                            size={14}
+                          />
+
+                        </span>
+
+                      </div>
+
+
+                      {(
+                        item.created_at ||
+                        item.timestamp
+                      ) && (
+
+                        <div className="history-date">
+
+                          {formatDate(
+                            item.created_at ||
+                            item.timestamp
+                          )}
+
+                        </div>
+
+                      )}
+
+                    </button>
+
+                  );
+
                 }
-              }}
-            />
-
-            <button
-              type="submit"
-              className="submit-button"
-              disabled={loading || !question.trim()}
-            >
-              {loading ? (
-                <Loader2 className="spin" size={19} />
-              ) : (
-                <Send size={19} />
               )}
 
-              {loading ? "Thinking..." : "Ask QueryMind"}
-            </button>
-          </div>
+            </div>
 
-          <span className="input-hint">
-            Press Enter to submit · Shift + Enter for a new line
-          </span>
-        </form>
+          )}
 
-        {error && (
-          <div className="global-error">
-            <AlertCircle size={18} />
-            {error}
-          </div>
-        )}
+        </aside>
 
-        {renderResult()}
-      </main>
 
-      <footer>
-        <span>QueryMind AI</span>
-        <span>Secure · Read-only · AI-powered</span>
-      </footer>
+        {/* ====================================================
+            PAGE CONTENT
+        ==================================================== */}
+
+        <div className="page-content">
+
+
+          {/* ==================================================
+              MAIN
+          ================================================== */}
+
+          <main className="main-content">
+
+
+            {/* ================================================
+                HERO
+            ================================================= */}
+
+            <section className="hero">
+
+              <div className="eyebrow">
+                ENTERPRISE TEXT-TO-SQL
+              </div>
+
+
+              <h2>
+
+                Ask your data.
+
+                <br />
+
+                <span>
+                  Get answers.
+                </span>
+
+              </h2>
+
+
+              <p>
+
+                Query your database using natural language.
+                QueryMind retrieves relevant schema context,
+                generates validated SQL, executes it safely,
+                and explains the result.
+
+              </p>
+
+            </section>
+
+
+            {/* ================================================
+                QUERY FORM
+            ================================================= */}
+
+            <section className="query-form">
+
+              <div className="input-container">
+
+                <textarea
+                  value={question}
+                  placeholder="Ask something like: What are the top 5 products by revenue?"
+                  onChange={(event) =>
+                    setQuestion(
+                      event.target.value
+                    )
+                  }
+                  onKeyDown={(event) => {
+
+                    if (
+                      event.key === "Enter" &&
+                      !event.shiftKey
+                    ) {
+
+                      event.preventDefault();
+
+                      submitQuery();
+
+                    }
+
+                  }}
+                  disabled={loading}
+                />
+
+
+                <button
+                  className="submit-button"
+                  onClick={submitQuery}
+                  disabled={
+                    loading ||
+                    !question.trim()
+                  }
+                >
+
+                  {loading ? (
+
+                    <>
+                      <Loader2
+                        size={16}
+                        className="spin"
+                      />
+
+                      Running...
+                    </>
+
+                  ) : (
+
+                    <>
+                      <Send size={16} />
+
+                      Run Query
+                    </>
+
+                  )}
+
+                </button>
+
+              </div>
+
+
+              <span className="input-hint">
+
+                Press Enter to run ·
+                Shift + Enter for a new line
+
+              </span>
+
+            </section>
+
+
+            {/* ================================================
+                CLARIFICATION
+            ================================================= */}
+
+            {clarification && (
+
+              <section className="result-card">
+
+                <div className="result-header">
+
+                  <div className="result-title">
+
+                    <ChevronRight size={18} />
+
+                    <div>
+
+                      <h2>
+                        Clarification required
+                      </h2>
+
+                      <p>
+                        Help QueryMind understand your intent.
+                      </p>
+
+                    </div>
+
+                  </div>
+
+
+                  <span className="status-badge clarification">
+
+                    Clarification
+
+                  </span>
+
+                </div>
+
+
+                <div className="clarification-content">
+
+                  <p className="clarification-question">
+
+                    {clarification}
+
+                  </p>
+
+
+                  {options.length > 0 && (
+
+                    <div className="clarification-options">
+
+                      {options.map(
+                        (option, index) => (
+
+                          <button
+                            key={index}
+                            className="option-button"
+                            onClick={() =>
+                              submitClarification(
+                                option.label ||
+                                option
+                              )
+                            }
+                            disabled={loading}
+                          >
+
+                            <strong>
+
+                              {option.label ||
+                                option}
+
+                            </strong>
+
+
+                            {option.description && (
+
+                              <span>
+
+                                {option.description}
+
+                              </span>
+
+                            )}
+
+                          </button>
+
+                        )
+                      )}
+
+                    </div>
+
+                  )}
+
+
+                  {options.length === 0 && (
+
+                    <div className="clarification-form">
+
+                      <input
+                        type="text"
+                        placeholder="Type your clarification..."
+                        disabled={loading}
+                        onKeyDown={(event) => {
+
+                          if (
+                            event.key === "Enter" &&
+                            event.target.value.trim()
+                          ) {
+
+                            submitClarification(
+                              event.target.value.trim()
+                            );
+
+                            event.target.value = "";
+
+                          }
+
+                        }}
+                      />
+
+                    </div>
+
+                  )}
+
+                </div>
+
+              </section>
+
+            )}
+
+
+            {/* ================================================
+                ERROR
+            ================================================= */}
+
+            {response?.status === "error" && (
+
+              <div className="global-error">
+
+                <X size={18} />
+
+                <span>
+
+                  {response.error ||
+                    "An unexpected error occurred."}
+
+                </span>
+
+              </div>
+
+            )}
+
+
+            {/* ================================================
+                UNSUPPORTED
+            ================================================= */}
+
+            {response?.status === "unsupported" && (
+
+              <section className="result-card error-card">
+
+                <div className="result-header">
+
+                  <div className="result-title">
+
+                    <X size={18} />
+
+                    <div>
+
+                      <h2>
+                        Query not supported
+                      </h2>
+
+                      <p>
+                        QueryMind could not answer this question.
+                      </p>
+
+                    </div>
+
+                  </div>
+
+
+                  <span className="status-badge unsupported">
+
+                    Unsupported
+
+                  </span>
+
+                </div>
+
+
+                <p className="reason-text">
+
+                  {response.reason}
+
+                </p>
+
+              </section>
+
+            )}
+
+
+            {/* ================================================
+                SUCCESS RESULT
+            ================================================= */}
+
+            {isSuccessfulResult && (
+
+              <section className="result-card">
+
+
+                {/* RESULT HEADER */}
+
+                <div className="result-header">
+
+                  <div className="result-title">
+
+                    <BarChart3 size={18} />
+
+                    <div>
+
+                      <h2>
+                        Query result
+                      </h2>
+
+                      <p>
+
+                        {response.question ||
+                          response.original_question ||
+                          question}
+
+                      </p>
+
+                    </div>
+
+                  </div>
+
+
+                  <span className="status-badge success">
+
+                    Completed
+
+                  </span>
+
+                </div>
+
+
+                {/* ANSWER */}
+
+                {response.answer && (
+
+                  <div className="answer-box">
+
+                    <span className="answer-label">
+
+                      Answer
+
+                    </span>
+
+
+                    <p>
+
+                      {response.answer}
+
+                    </p>
+
+                  </div>
+
+                )}
+
+
+                {/* METRICS */}
+
+                <div className="result-metrics">
+
+                  <div className="metric-card">
+
+                    <div className="metric-label">
+                      Rows
+                    </div>
+
+                    <div className="metric-value">
+
+                      {response.row_count ?? 0}
+
+                    </div>
+
+                  </div>
+
+
+                  <div className="metric-card">
+
+                    <div className="metric-label">
+                      SQL
+                    </div>
+
+                    <div className="metric-value">
+
+                      {response.sql
+                        ? "Generated"
+                        : "—"}
+
+                    </div>
+
+                  </div>
+
+
+                  <div className="metric-card">
+
+                    <div className="metric-label">
+                      Status
+                    </div>
+
+                    <div className="metric-value">
+
+                      Ready
+
+                    </div>
+
+                  </div>
+
+                </div>
+
+
+                {/* CHART */}
+
+                {chartConfig && (
+
+                  <div className="chart-section">
+
+                    <div className="chart-header">
+
+                      <div>
+
+                        <div className="chart-title">
+                          Visualization
+                        </div>
+
+                        <div className="chart-subtitle">
+
+                          {chartConfig.valueColumn}
+                          {" "}by{" "}
+                          {chartConfig.labelColumn}
+
+                        </div>
+
+                      </div>
+
+                    </div>
+
+
+                    <div className="chart-container">
+
+                      <ResponsiveContainer
+                        width="100%"
+                        height="100%"
+                      >
+
+                        <BarChart
+                          data={chartConfig.data}
+                          margin={{
+                            top: 10,
+                            right: 20,
+                            left: 10,
+                            bottom: 50,
+                          }}
+                        >
+
+                          <CartesianGrid
+                            strokeDasharray="3 3"
+                          />
+
+                          <XAxis
+                            dataKey="label"
+                            angle={-35}
+                            textAnchor="end"
+                            interval={0}
+                            height={70}
+                          />
+
+                          <YAxis />
+
+                          <Tooltip />
+
+                          <Bar
+                            dataKey="value"
+                            name={
+                              chartConfig.valueColumn
+                            }
+                            radius={[
+                              5,
+                              5,
+                              0,
+                              0,
+                            ]}
+                          />
+
+                        </BarChart>
+
+                      </ResponsiveContainer>
+
+                    </div>
+
+                  </div>
+
+                )}
+
+
+                {/* TABLE */}
+
+                {response.rows &&
+                  response.rows.length > 0 && (
+
+                    <div className="table-wrapper">
+
+                      <table>
+
+                        <thead>
+
+                          <tr>
+
+                            {Object.keys(
+                              response.rows[0]
+                            ).map(
+                              (column) => (
+
+                                <th key={column}>
+
+                                  {column}
+
+                                </th>
+
+                              )
+                            )}
+
+                          </tr>
+
+                        </thead>
+
+
+                        <tbody>
+
+                          {response.rows.map(
+                            (row, rowIndex) => (
+
+                              <tr key={rowIndex}>
+
+                                {Object.keys(
+                                  response.rows[0]
+                                ).map(
+                                  (column) => (
+
+                                    <td key={column}>
+
+                                      {row[column] === null
+                                        ? "NULL"
+                                        : String(
+                                            row[column]
+                                          )}
+
+                                    </td>
+
+                                  )
+                                )}
+
+                              </tr>
+
+                            )
+                          )}
+
+                        </tbody>
+
+                      </table>
+
+                    </div>
+
+                  )}
+
+
+                {/* SQL */}
+
+                {response.sql && (
+
+                  <div className="sql-section">
+
+                    <div className="sql-header">
+
+                      <button
+                        className="sql-toggle"
+                        onClick={() =>
+                          setSqlOpen(
+                            (previous) =>
+                              !previous
+                          )
+                        }
+                      >
+
+                        <span>
+
+                          <Database size={14} />
+
+                          Generated SQL
+
+                        </span>
+
+
+                        <span className="sql-actions">
+
+                          {sqlOpen
+                            ? "Hide"
+                            : "Show"}
+
+                        </span>
+
+                      </button>
+
+
+                      <button
+                        className="sql-copy-button"
+                        onClick={() =>
+                          copySql(
+                            response.sql
+                          )
+                        }
+                      >
+
+                        {copied ? (
+
+                          <>
+                            <Check size={13} />
+                            Copied
+                          </>
+
+                        ) : (
+
+                          <>
+                            <Copy size={13} />
+                            Copy
+                          </>
+
+                        )}
+
+                      </button>
+
+                    </div>
+
+
+                    {sqlOpen && (
+
+                      <pre className="sql-code">
+
+                        {response.sql}
+
+                      </pre>
+
+                    )}
+
+                  </div>
+
+                )}
+
+              </section>
+
+            )}
+
+          </main>
+
+
+          {/* ==================================================
+              FOOTER
+          ================================================== */}
+
+          <footer>
+
+            <span>
+              QueryMind AI
+            </span>
+
+            <span>
+              Secure read-only database intelligence
+            </span>
+
+          </footer>
+
+        </div>
+
+      </div>
+
     </div>
+
   );
 }
+
 
 export default App;
