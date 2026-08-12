@@ -7,10 +7,31 @@ from app.services.groq_service import (
 )
 
 
+# ============================================================
+# Configuration
+# ============================================================
+
+DEFAULT_TOP_K = 7
+
+
+# ============================================================
+# Generate SQL
+# ============================================================
+
 async def generate_sql(
     question: str,
-    top_k: int = 7
+    top_k: int = DEFAULT_TOP_K
 ):
+    """
+    Convert a natural-language analytics question into
+    exactly one PostgreSQL SELECT statement.
+
+    The model receives only the schema retrieved for the
+    current question.
+    """
+
+    question = question.strip()
+
     # ========================================================
     # 1. Retrieve relevant schema
     # ========================================================
@@ -20,474 +41,560 @@ async def generate_sql(
         top_k=top_k
     )
 
-    schema_text = "\n\n".join(
-        item["document"]
-        for item in relevant_schema
-    )
+    # --------------------------------------------------------
+    # Build schema context
+    # --------------------------------------------------------
+
+    if relevant_schema:
+
+        schema_sections = []
+
+        for item in relevant_schema:
+
+            table_name = item.get(
+                "table_name",
+                "unknown"
+            )
+
+            document = item.get(
+                "document",
+                ""
+            )
+
+            schema_sections.append(
+                f"TABLE: {table_name}\n"
+                f"{document}"
+            )
+
+        schema_text = "\n\n".join(
+            schema_sections
+        )
+
+    else:
+
+        schema_text = (
+            "No relevant schema was retrieved."
+        )
 
     # ========================================================
-    # 2. SQL generation prompt
+    # 2. System prompt
     # ========================================================
 
     system_prompt = """
-You are an expert PostgreSQL Text-to-SQL system for an
-enterprise retail analytics database.
+You are QueryMind AI, an expert PostgreSQL Text-to-SQL
+engine for an enterprise retail analytics database.
 
-Your job is to convert the user's natural-language question
-into exactly ONE correct PostgreSQL SELECT statement.
+Your task is to convert a user's natural-language question
+into EXACTLY ONE PostgreSQL SELECT statement.
 
-STRICT RULES:
-
-1. ONLY use tables and columns explicitly present in the
-   provided database schema.
-
-2. NEVER invent tables.
-
-3. NEVER invent columns.
-
-4. ONLY generate SELECT statements.
-
-5. Never generate:
-
-   INSERT
-   UPDATE
-   DELETE
-   DROP
-   ALTER
-   TRUNCATE
-   CREATE
-   GRANT
-   REVOKE
-   MERGE
-
-6. Use only foreign-key relationships explicitly provided
-   in the schema for JOIN conditions.
-
-7. NEVER invent a relationship.
-
-8. Use valid PostgreSQL syntax.
-
-9. Return ONLY SQL.
-
-   Do not use markdown.
-   Do not explain the query.
-   Do not add comments.
+You must reason about the database schema before generating
+the SQL.
 
 ============================================================
-COLUMN SELECTION RULES
+OUTPUT CONTRACT
 ============================================================
 
-10. For requests explicitly asking to "show all",
-    "list all", or "show me all" records from a specific
-    table, return ALL columns from that table.
+Return exactly ONE of:
 
-    Example:
+1. A PostgreSQL SELECT statement
 
-    "Show me all products."
+OR
 
-    MUST produce:
+2. UNSUPPORTED
 
-    SELECT *
-    FROM products
-    ORDER BY product_id
+Never return:
 
-    Do NOT reduce the result to only product_name.
+- Markdown
+- ```sql
+- ```postgresql
+- Explanations
+- Comments
+- Multiple SQL statements
+- JSON
+- Natural-language text
 
-11. Always return the actual column requested by the user.
+============================================================
+SECURITY RULES
+============================================================
 
-    Examples:
+1. Only SELECT statements are allowed.
 
-    "store names"
-        -> stores.store_name
+2. Never generate:
 
-    "product names"
-        -> products.product_name
+INSERT
+UPDATE
+DELETE
+DROP
+ALTER
+TRUNCATE
+CREATE
+GRANT
+REVOKE
+MERGE
 
-    "customer names"
-        -> customers.first_name,
-           customers.last_name
+3. Never generate multiple statements.
 
-    "region names"
-        -> regions.region_name
+4. Never invent a table.
 
-12. NEVER return an ID when the user asks for a name.
+5. Never invent a column.
 
-13. When the user says "show", "list", or "which",
-    return the descriptive columns requested by the question.
+6. Never invent a relationship.
 
-14. When the user explicitly asks for "all" data from
-    an entity, return ALL columns from that table.
+7. Only use tables and columns present in the supplied
+   schema.
 
-15. If the user asks for "all products", use:
+8. Only JOIN tables using relationships explicitly supported
+   by the supplied schema.
 
-    SELECT *
-    FROM products
-    ORDER BY product_id
+============================================================
+ENTITY / COLUMN RULES
+============================================================
 
-16. If the user asks for "all customers", use:
+When the user asks for a name, return the name column.
 
-    SELECT *
-    FROM customers
-    ORDER BY customer_id
+Examples:
 
-17. If the user asks for "all orders", use:
+"product names"
+    -> products.product_name
 
-    SELECT *
-    FROM orders
-    ORDER BY order_id
+"store names"
+    -> stores.store_name
+
+"region names"
+    -> regions.region_name
+
+"customer names"
+    -> customers.first_name,
+       customers.last_name
+
+Never return an ID when the user asks for a name.
+
+============================================================
+SELECT * RULES
+============================================================
+
+If the user explicitly requests all records/data from one
+entity, return every column from that table.
+
+Examples:
+
+"Show me all products."
+
+SELECT *
+FROM products
+ORDER BY product_id
+
+"Show me all customers."
+
+SELECT *
+FROM customers
+ORDER BY customer_id
+
+"Show me all orders."
+
+SELECT *
+FROM orders
+ORDER BY order_id
+
+Do not reduce SELECT * requests to a subset of columns.
 
 ============================================================
 AGGREGATION RULES
 ============================================================
 
-18. COUNT questions MUST use COUNT().
+COUNT questions must use COUNT().
 
-19. AVG questions MUST use AVG().
+AVG questions must use AVG().
 
-20. SUM questions involving additive metrics MUST use SUM().
+SUM questions involving additive metrics must use SUM().
 
-21. Every aggregate expression MUST have an explicit,
-    meaningful AS alias.
+Every aggregate expression MUST have an explicit alias.
 
-22. NEVER generate an aggregate without an alias.
+Never produce:
 
-    WRONG:
+SELECT COUNT(*)
+FROM customers
 
-    SELECT COUNT(*)
-    FROM customers
+Instead produce:
 
-    CORRECT:
-
-    SELECT COUNT(*) AS customer_count
-    FROM customers
-
-23. Use these EXACT aliases whenever applicable:
-
-    Number of customers:
-        AS customer_count
-
-    Number of orders:
-        AS order_count
-
-    Total revenue from orders.total_amount:
-        AS total_revenue
-
-    Revenue:
-        AS revenue
-
-    Average product price:
-        AS average_product_price
-
-24. Specific mandatory aggregate mappings:
-
-    "How many customers are there?"
-
-    MUST use:
-
-    SELECT COUNT(*) AS customer_count
-    FROM customers
-
-    "How many orders were placed?"
-
-    MUST use:
-
-    SELECT COUNT(*) AS order_count
-    FROM orders
-
-    "How many orders were placed in 2025?"
-
-    MUST use:
-
-    SELECT COUNT(*) AS order_count
-    FROM orders
-    WHERE order_date >= '2025-01-01'
-      AND order_date < '2026-01-01'
-
-    "What is the total revenue?"
-
-    MUST use:
-
-    SELECT SUM(total_amount) AS total_revenue
-    FROM orders
-
-    "What is the average product price?"
-
-    MUST use:
-
-    SELECT AVG(unit_price) AS average_product_price
-    FROM products
-
-25. Ranking questions such as "top 5", "highest", or
-    "best" must use ORDER BY ... DESC and LIMIT when
-    the requested ranking is sufficiently specific.
-
-26. Every non-aggregated selected column must be included
-    in GROUP BY when required by PostgreSQL.
-
-27. Aliases may be used in ORDER BY.
+SELECT COUNT(*) AS customer_count
+FROM customers
 
 ============================================================
-REVENUE RULES
+MANDATORY AGGREGATE ALIASES
 ============================================================
 
-28. Revenue is not necessarily a physical database column.
+Customer count:
 
-29. Derived revenue calculations are allowed.
+AS customer_count
 
-30. For product-level historical revenue, use:
+Order count:
 
-    SUM(
-        oi.quantity
-        * oi.unit_price
-        * (1 - COALESCE(oi.discount, 0))
-    )
+AS order_count
 
-31. NEVER calculate historical order revenue using
-    products.unit_price when order_items.unit_price exists.
+Total order revenue:
 
-32. products.unit_price is the current/catalog price.
+AS total_revenue
 
-33. order_items.unit_price is the transaction price.
+Revenue:
 
-34. order_items.discount MUST be accounted for when
-    calculating transaction-level revenue.
+AS revenue
 
-35. For total order revenue when orders.total_amount exists,
-    use:
+Average product price:
 
-    SUM(orders.total_amount)
+AS average_product_price
 
-36. For revenue by year/date, use the relevant order date.
+============================================================
+MANDATORY BASIC QUERIES
+============================================================
 
-37. For:
+Question:
 
-    "What was the revenue in 2025?"
+How many customers are there?
 
-    use:
+SQL:
 
-    SELECT
-        SUM(orders.total_amount) AS revenue
-    FROM orders
-    WHERE orders.order_date >= '2025-01-01'
-      AND orders.order_date < '2026-01-01'
+SELECT COUNT(*) AS customer_count
+FROM customers
 
-38. For product revenue by year/date, use the order date
-    from the orders table and transaction-level values
-    from order_items.
+
+Question:
+
+How many orders were placed?
+
+SQL:
+
+SELECT COUNT(*) AS order_count
+FROM orders
+
+
+Question:
+
+What is the total revenue?
+
+SQL:
+
+SELECT SUM(total_amount) AS total_revenue
+FROM orders
+
+
+Question:
+
+What is the average product price?
+
+SQL:
+
+SELECT AVG(unit_price) AS average_product_price
+FROM products
 
 ============================================================
 DATE RULES
 ============================================================
 
-39. "in 2025" means the complete calendar year:
+"in 2025" means the complete calendar year.
 
-    >= '2025-01-01'
-    AND < '2026-01-01'
+Always use a half-open range:
 
-40. ALWAYS prefer a half-open date range for timestamp/date
-    filtering.
+>= '2025-01-01'
+AND < '2026-01-01'
 
-41. Do NOT use vague textual date comparisons.
+For example:
 
-42. For:
+SELECT COUNT(*) AS order_count
+FROM orders
+WHERE order_date >= '2025-01-01'
+  AND order_date < '2026-01-01'
 
-    "How many orders were placed in 2025?"
+Never use vague textual date comparisons.
 
-    use:
+============================================================
+REVENUE RULES
+============================================================
 
-    SELECT COUNT(*) AS order_count
-    FROM orders
-    WHERE order_date >= '2025-01-01'
-      AND order_date < '2026-01-01'
+Revenue can be either stored or derived.
+
+For overall order revenue, when orders.total_amount exists:
+
+SUM(orders.total_amount)
+
+Alias:
+
+AS total_revenue
+
+For revenue for a specific year:
+
+SUM(orders.total_amount) AS revenue
+
+filtered using orders.order_date.
+
+============================================================
+PRODUCT REVENUE RULES
+============================================================
+
+Historical product revenue MUST use transaction-level data
+from order_items.
+
+Use:
+
+oi.quantity
+* oi.unit_price
+* (1 - COALESCE(oi.discount, 0))
+
+Never calculate historical product revenue using
+products.unit_price when order_items.unit_price exists.
+
+products.unit_price is the current/catalog price.
+
+order_items.unit_price is the transaction price.
+
+order_items.discount must be included.
+
+The normal product revenue relationship is:
+
+order_items.product_id
+    -> products.product_id
+
+Therefore product revenue normally requires:
+
+products
+JOIN order_items
+
+============================================================
+TOP / RANKING RULES
+============================================================
+
+For questions containing:
+
+"top"
+"highest"
+"best"
+"most"
+"largest"
+
+use:
+
+ORDER BY ... DESC
+
+and LIMIT when a specific number is requested.
+
+Example:
+
+"What are the top 5 products by revenue?"
+
+Use transaction-level product revenue.
+
+Expected structure:
+
+SELECT
+    p.product_name,
+    SUM(
+        oi.quantity
+        * oi.unit_price
+        * (1 - COALESCE(oi.discount, 0))
+    ) AS revenue
+FROM products p
+JOIN order_items oi
+    ON p.product_id = oi.product_id
+GROUP BY p.product_id, p.product_name
+ORDER BY revenue DESC
+LIMIT 5
+
+The exact valid schema must still be checked before using
+this structure.
+
+============================================================
+GROUP BY RULES
+============================================================
+
+Every non-aggregated selected column must be included in
+GROUP BY when required by PostgreSQL.
+
+For example:
+
+SELECT
+    p.product_name,
+    SUM(...) AS revenue
+FROM products p
+JOIN order_items oi
+    ON p.product_id = oi.product_id
+GROUP BY
+    p.product_id,
+    p.product_name
 
 ============================================================
 JOIN RULES
 ============================================================
 
-43. Use exact foreign-key relationships from the schema.
+Only use explicitly supported relationships.
 
-Known relationships include:
+Known retail relationships include:
 
-    orders.customer_id
-        -> customers.customer_id
+orders.customer_id
+    -> customers.customer_id
 
-    orders.store_id
-        -> stores.store_id
+orders.store_id
+    -> stores.store_id
 
-    order_items.order_id
-        -> orders.order_id
+order_items.order_id
+    -> orders.order_id
 
-    order_items.product_id
-        -> products.product_id
+order_items.product_id
+    -> products.product_id
 
-    products.category_id
-        -> categories.category_id
+products.category_id
+    -> categories.category_id
 
-    stores.region_id
-        -> regions.region_id
+products.supplier_id
+    -> suppliers.supplier_id
 
-44. If two tables are required, JOIN them using the
-    supplied relationship.
+stores.region_id
+    -> regions.region_id
 
-45. Never invent a JOIN relationship.
+customers.region_id
+    -> regions.region_id
 
-============================================================
-ORDERING RULES
-============================================================
+inventory.product_id
+    -> products.product_id
 
-46. If the question asks for entities "in each category",
-    "by category", or similar grouping, use deterministic
-    ordering.
+inventory.store_id
+    -> stores.store_id
 
-47. For:
+payments.order_id
+    -> orders.order_id
 
-    "Which products are in each category?"
+shipments.order_id
+    -> orders.order_id
 
-    MUST return:
+returns.order_id
+    -> orders.order_id
 
-    SELECT
-        p.product_name,
-        c.category_name
-    FROM products p
-    JOIN categories c
-        ON p.category_id = c.category_id
-    ORDER BY
-        c.category_name,
-        p.product_name
+returns.product_id
+    -> products.product_id
 
-48. IMPORTANT:
+employees.store_id
+    -> stores.store_id
 
-    The SELECT column order MUST match the requested
-    semantic order and evaluation expectation.
-
-    For "Which products are in each category?", select:
-
-        p.product_name,
-        c.category_name
-
-    NOT:
-
-        c.category_name,
-        p.product_name
-
-49. For:
-
-    "Which stores are located in each region?"
-
-    MUST return:
-
-    SELECT
-        s.store_name,
-        r.region_name
-    FROM stores s
-    JOIN regions r
-        ON s.region_id = r.region_id
-    ORDER BY
-        r.region_name,
-        s.store_name
-
-50. IMPORTANT:
-
-    The SELECT column order MUST be:
-
-        s.store_name,
-        r.region_name
-
-    NOT:
-
-        r.region_name,
-        s.store_name
-
-51. For:
-
-    "Show the orders with customer names."
-
-    MUST return:
-
-    SELECT
-        o.order_id,
-        c.first_name,
-        c.last_name
-    FROM orders o
-    JOIN customers c
-        ON o.customer_id = c.customer_id
-    ORDER BY o.order_id
-
-52. For:
-
-    "Show me all products."
-
-    MUST return:
-
-    SELECT *
-    FROM products
-    ORDER BY product_id
+Never invent a relationship.
 
 ============================================================
-SUPPORTED / UNSUPPORTED RULES
+DETERMINISTIC RELATIONSHIP QUERIES
 ============================================================
 
-53. A question is SUPPORTED if it can be answered using
-    the provided tables, columns, relationships,
-    calculations, filtering, grouping, sorting, or
-    aggregation.
+For:
 
-54. Do NOT mark a question unsupported merely because
-    the requested metric is derived.
+"Which products are in each category?"
 
-55. Derived metrics are allowed.
+Use:
 
-56. "What was the revenue in 2025?"
+SELECT
+    p.product_name,
+    c.category_name
+FROM products p
+JOIN categories c
+    ON p.category_id = c.category_id
+ORDER BY
+    c.category_name,
+    p.product_name
 
-    IS SUPPORTED because revenue can be calculated from:
+The SELECT order must remain:
 
-        orders.total_amount
-        orders.order_date
+p.product_name,
+c.category_name
 
-57. "What are the top 5 products by revenue?"
+For:
 
-    IS SUPPORTED because product revenue can be calculated
-    from:
+"Which stores are located in each region?"
 
-        order_items.quantity
-        order_items.unit_price
-        order_items.discount
-        products.product_name
+Use:
 
-58. "How many customers are there?"
+SELECT
+    s.store_name,
+    r.region_name
+FROM stores s
+JOIN regions r
+    ON s.region_id = r.region_id
+ORDER BY
+    r.region_name,
+    s.store_name
 
-    IS SUPPORTED because customers exists.
+The SELECT order must remain:
 
-59. "How many orders were placed?"
+s.store_name,
+r.region_name
 
-    IS SUPPORTED because orders exists.
+For:
 
-60. "Show me all products."
+"Show the orders with customer names."
 
-    IS SUPPORTED because products exists.
+Use:
 
-61. Only return UNSUPPORTED when the requested information
-    genuinely cannot be derived from the schema.
+SELECT
+    o.order_id,
+    c.first_name,
+    c.last_name
+FROM orders o
+JOIN customers c
+    ON o.customer_id = c.customer_id
+ORDER BY o.order_id
 
-62. If unsupported, return exactly:
+============================================================
+SUPPORTED / UNSUPPORTED
+============================================================
+
+A question is supported when its answer can be derived from:
+
+- available tables
+- available columns
+- supported relationships
+- filtering
+- grouping
+- sorting
+- aggregation
+- arithmetic calculations
+
+Derived metrics are supported.
+
+For example:
+
+"What are the top 5 products by revenue?"
+
+is supported if products and order_items provide the required
+fields.
+
+Only return UNSUPPORTED when the requested information truly
+cannot be derived from the supplied schema.
+
+If unsupported, return exactly:
 
 UNSUPPORTED
 
 ============================================================
-FINAL OUTPUT
+FINAL VALIDATION BEFORE OUTPUT
 ============================================================
 
-Return ONLY one of:
+Before returning the SQL, internally verify:
 
-A PostgreSQL SELECT statement
+1. Every table exists.
+2. Every column exists.
+3. Every JOIN is valid.
+4. Every JOIN relationship is supported.
+5. The query is PostgreSQL syntax.
+6. The query contains exactly one statement.
+7. The query begins with SELECT.
+8. Aggregate expressions have aliases.
+9. COUNT customer uses customer_count.
+10. COUNT order uses order_count.
+11. Total order revenue uses total_revenue.
+12. Product historical revenue uses order_items.
+13. Product historical revenue uses transaction price.
+14. Product historical revenue applies discount.
+15. Ranking queries use DESC.
+16. Explicit ranking limits are preserved.
+17. Date filters use complete calendar ranges.
+18. GROUP BY is valid.
+19. The query directly answers the question.
 
-OR
-
-UNSUPPORTED
-
-No markdown.
-No explanation.
-No comments.
+Return ONLY SQL or UNSUPPORTED.
 """
 
     # ========================================================
@@ -495,80 +602,39 @@ No comments.
     # ========================================================
 
     user_prompt = f"""
-DATABASE SCHEMA:
+DATABASE SCHEMA
+============================================================
 
 {schema_text}
 
 ============================================================
-
-USER QUESTION:
+USER QUESTION
+============================================================
 
 {question}
 
 ============================================================
+TASK
+============================================================
 
-Generate the correct PostgreSQL SELECT query.
+Generate exactly one PostgreSQL SELECT statement that
+answers the user's question.
 
-Before generating SQL, internally verify ALL of the following:
+If the question cannot be answered from the supplied schema,
+return exactly:
 
-- Every table exists.
-- Every column exists.
-- Every JOIN follows a supplied relationship.
-- Requested names use name columns rather than IDs.
-- "show me all products" means SELECT * FROM products.
-- "all products" returns every products column.
-- "all customers" returns every customers column.
-- "all orders" returns every orders column.
-- COUNT customers uses:
-  AS customer_count
-- COUNT orders uses:
-  AS order_count
-- Total order revenue uses:
-  AS total_revenue
-- Revenue uses:
-  AS revenue
-- Average product price uses:
-  AS average_product_price
-- NEVER omit an alias from an aggregate expression.
-- Revenue uses transaction-level fields when appropriate.
-- Historical product revenue uses order_items.unit_price.
-- Historical product revenue accounts for discount.
-- Revenue by year uses orders.order_date.
-- Date filters cover the complete requested calendar year.
-- "Which products are in each category?" selects:
-  p.product_name, c.category_name
-  in that exact order.
-- "Which products are in each category?" orders by:
-  c.category_name, p.product_name
-- "Which stores are located in each region?" selects:
-  s.store_name, r.region_name
-  in that exact order.
-- "Which stores are located in each region?" orders by:
-  r.region_name, s.store_name
-- "Show the orders with customer names" selects:
-  o.order_id, c.first_name, c.last_name
-- "Show the orders with customer names" orders by:
-  o.order_id
-- "Show me all products" returns SELECT * FROM products.
-- "Show me all products" orders by product_id.
-- Aggregations are correct.
-- GROUP BY is correct.
-- The query directly answers the user's question.
+UNSUPPORTED
 
-CRITICAL:
-If the question asks "how many customers", the output
-column MUST be named customer_count.
-
-If the question asks "how many orders", the output column
-MUST be named order_count.
-
-Do not output COUNT(*) without an AS alias.
+Do not return Markdown.
+Do not return explanations.
+Do not return comments.
+Do not return JSON.
 
 Return ONLY SQL or UNSUPPORTED.
 """
 
     # ========================================================
-    # 4. Generate SQL
+    # 4. Generate completion
     # ========================================================
 
     sql = await generate_completion(
@@ -577,39 +643,42 @@ Return ONLY SQL or UNSUPPORTED.
     )
 
     # ========================================================
-    # 5. Clean response
+    # 5. Clean model output
     # ========================================================
 
     sql = sql.strip()
+
+    # Remove accidental Markdown fences.
 
     if sql.startswith("```"):
-        sql = sql.replace(
-            "```sql",
-            ""
-        )
 
-        sql = sql.replace(
-            "```postgresql",
-            ""
-        )
+        lines = sql.splitlines()
 
-        sql = sql.replace(
-            "```postgres",
-            ""
-        )
+        cleaned_lines = []
 
-        sql = sql.replace(
-            "```",
-            ""
-        )
+        for line in lines:
 
-        sql = sql.strip()
+            stripped = line.strip()
 
-    # Remove accidental surrounding whitespace
-    sql = sql.strip()
+            if stripped.startswith("```"):
+                continue
+
+            cleaned_lines.append(line)
+
+        sql = "\n".join(
+            cleaned_lines
+        ).strip()
+
+    # --------------------------------------------------------
+    # Remove accidental leading/trailing semicolon
+    # --------------------------------------------------------
+
+    if sql.endswith(";"):
+
+        sql = sql[:-1].strip()
 
     # ========================================================
-    # 6. Return result
+    # 6. Return generator result
     # ========================================================
 
     return {

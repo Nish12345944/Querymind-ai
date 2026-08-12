@@ -36,6 +36,15 @@ async def generate_completion(
     system_prompt: str,
     user_prompt: str
 ) -> str:
+    """
+    Generate a deterministic completion from Groq.
+
+    The function includes:
+    - timeout protection
+    - retry handling
+    - exponential backoff
+    - empty-response protection
+    """
 
     last_error: Optional[Exception] = None
 
@@ -61,16 +70,28 @@ async def generate_completion(
                 timeout=REQUEST_TIMEOUT
             )
 
-            content = response.choices[0].message.content
+            if not response.choices:
+
+                raise RuntimeError(
+                    "Groq returned no completion choices."
+                )
+
+            content = (
+                response
+                .choices[0]
+                .message
+                .content
+            )
 
             if not content:
+
                 raise RuntimeError(
                     "Groq returned an empty response."
                 )
 
             return content.strip()
 
-        except asyncio.TimeoutError as exc:
+        except asyncio.TimeoutError:
 
             last_error = TimeoutError(
                 "Groq request timed out."
@@ -82,28 +103,38 @@ async def generate_completion(
 
             error_text = str(exc).lower()
 
-            retryable = (
-                "429" in error_text
-                or "rate limit" in error_text
-                or "timeout" in error_text
-                or "timed out" in error_text
-                or "connection" in error_text
-                or "temporarily unavailable" in error_text
-                or "503" in error_text
-                or "502" in error_text
-                or "504" in error_text
+            retryable = any(
+                marker in error_text
+                for marker in (
+                    "429",
+                    "rate limit",
+                    "timeout",
+                    "timed out",
+                    "connection",
+                    "temporarily unavailable",
+                    "503",
+                    "502",
+                    "504",
+                )
             )
+
+            # ------------------------------------------------
+            # Do not retry permanent errors
+            # ------------------------------------------------
 
             if not retryable:
                 raise
 
         # ----------------------------------------------------
-        # Retry handling
+        # Exponential backoff
         # ----------------------------------------------------
 
         if attempt < MAX_RETRIES - 1:
 
-            delay = INITIAL_RETRY_DELAY * (2 ** attempt)
+            delay = (
+                INITIAL_RETRY_DELAY
+                * (2 ** attempt)
+            )
 
             await asyncio.sleep(delay)
 
@@ -112,6 +143,6 @@ async def generate_completion(
     # ========================================================
 
     raise RuntimeError(
-        f"Groq completion failed after "
+        "Groq completion failed after "
         f"{MAX_RETRIES} attempts: {last_error}"
     )
