@@ -1,10 +1,14 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import desc, select
 
 from app.db.database import AsyncSessionLocal
 from app.db.models import QueryHistory
 
+
+# ============================================================
+# SAVE QUERY HISTORY
+# ============================================================
 
 async def save_query_history(
     *,
@@ -28,7 +32,7 @@ async def save_query_history(
             answer=answer,
             error=error,
             duration_ms=duration_ms,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
         )
 
         session.add(history)
@@ -39,6 +43,10 @@ async def save_query_history(
 
         return history
 
+
+# ============================================================
+# GET QUERY HISTORY
+# ============================================================
 
 async def get_query_history(
     limit: int = 50,
@@ -55,6 +63,10 @@ async def get_query_history(
 
         return result.scalars().all()
 
+
+# ============================================================
+# GET QUERY HISTORY BY ID
+# ============================================================
 
 async def get_query_history_by_id(
     history_id: int,
