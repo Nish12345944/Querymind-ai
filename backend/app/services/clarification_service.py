@@ -1,3 +1,4 @@
+import json
 import re
 
 from app.services.schema_service import (
@@ -13,7 +14,6 @@ def normalize_question(question: str) -> str:
     """
     Normalize user input for deterministic checks.
     """
-
     question = question.lower()
 
     question = re.sub(
@@ -26,7 +26,7 @@ def normalize_question(question: str) -> str:
 
 
 # ============================================================
-# GET TABLE COLUMNS
+# SCHEMA HELPERS
 # ============================================================
 
 def get_columns(
@@ -34,7 +34,7 @@ def get_columns(
     table_name: str
 ) -> set:
     """
-    Return the set of column names for a table.
+    Return the column names for a table.
     """
 
     if table_name not in schema:
@@ -49,37 +49,36 @@ def get_columns(
     }
 
 
-# ============================================================
-# CHECK TABLE EXISTS
-# ============================================================
-
 def has_table(
     schema: dict,
     table_name: str
 ) -> bool:
+    """
+    Check whether a table exists.
+    """
+
     return table_name in schema
 
-
-# ============================================================
-# CHECK MULTIPLE REQUIRED COLUMNS
-# ============================================================
 
 def has_columns(
     schema: dict,
     table_name: str,
     required_columns: set
 ) -> bool:
+    """
+    Check whether a table contains all required columns.
+    """
 
-    columns = get_columns(
-        schema,
-        table_name
+    return required_columns.issubset(
+        get_columns(
+            schema,
+            table_name
+        )
     )
-
-    return required_columns.issubset(columns)
 
 
 # ============================================================
-# DETERMINISTIC SUPPORTED-QUESTION CHECK
+# DETERMINISTIC SUPPORTED CHECK
 # ============================================================
 
 def is_definitely_supported(
@@ -91,33 +90,13 @@ def is_definitely_supported(
     the current database schema.
 
     These checks happen BEFORE Groq.
-
-    This prevents the LLM from incorrectly classifying
-    supported questions as UNSUPPORTED or AMBIGUOUS.
     """
 
     q = normalize_question(question)
 
-
-
-        # ========================================================
-    # AMBIGUOUS "BEST PRODUCTS"
     # ========================================================
-    #
-    # "best products" is ambiguous because the user has not
-    # specified the metric:
-    #
-    # - revenue
-    # - sales quantity
-    # - profit
-    # - rating
-    # - etc.
-    #
-    # Therefore this must NOT be treated as a definitely
-    # supported SQL question.
-    #
-    # The clarification layer should ask the user which
-    # metric they mean.
+    # IMPORTANT:
+    # "best products" without a metric is ambiguous.
     # ========================================================
 
     if (
@@ -139,8 +118,7 @@ def is_definitely_supported(
             return False
 
     # ========================================================
-    # Q001
-    # Top products by revenue
+    # TOP PRODUCTS BY REVENUE
     # ========================================================
 
     if (
@@ -156,46 +134,38 @@ def is_definitely_supported(
             ]
         )
     ):
-
-        required_products = {
-            "product_id",
-            "product_name"
-        }
-
-        required_order_items = {
-            "product_id",
-            "quantity",
-            "unit_price"
-        }
-
-        required_orders = {
-            "order_id"
-        }
-
         if (
             has_columns(
                 schema,
                 "products",
-                required_products
+                {
+                    "product_id",
+                    "product_name"
+                }
             )
             and
             has_columns(
                 schema,
                 "order_items",
-                required_order_items
+                {
+                    "product_id",
+                    "quantity",
+                    "unit_price"
+                }
             )
             and
             has_columns(
                 schema,
                 "orders",
-                required_orders
+                {
+                    "order_id"
+                }
             )
         ):
             return True
 
     # ========================================================
-    # Q002
-    # Count customers
+    # COUNT CUSTOMERS
     # ========================================================
 
     if (
@@ -209,7 +179,6 @@ def is_definitely_supported(
             ]
         )
     ):
-
         if has_table(
             schema,
             "customers"
@@ -217,8 +186,7 @@ def is_definitely_supported(
             return True
 
     # ========================================================
-    # Q003
-    # Count orders
+    # COUNT ORDERS
     # ========================================================
 
     if (
@@ -232,7 +200,6 @@ def is_definitely_supported(
             ]
         )
     ):
-
         if has_table(
             schema,
             "orders"
@@ -240,15 +207,13 @@ def is_definitely_supported(
             return True
 
     # ========================================================
-    # Q004
-    # Total revenue
+    # TOTAL REVENUE
     # ========================================================
 
     if (
         "revenue" in q
         and "total" in q
     ):
-
         if has_columns(
             schema,
             "orders",
@@ -258,9 +223,18 @@ def is_definitely_supported(
         ):
             return True
 
+        if has_columns(
+            schema,
+            "order_items",
+            {
+                "quantity",
+                "unit_price"
+            }
+        ):
+            return True
+
     # ========================================================
-    # Q005
-    # Average product price
+    # AVERAGE PRODUCT PRICE
     # ========================================================
 
     if (
@@ -271,7 +245,6 @@ def is_definitely_supported(
             or "avg" in q
         )
     ):
-
         if has_columns(
             schema,
             "products",
@@ -282,15 +255,13 @@ def is_definitely_supported(
             return True
 
     # ========================================================
-    # Q006
-    # Products in categories
+    # PRODUCTS IN CATEGORIES
     # ========================================================
 
     if (
         "product" in q
         and "categor" in q
     ):
-
         if (
             has_columns(
                 schema,
@@ -314,8 +285,7 @@ def is_definitely_supported(
             return True
 
     # ========================================================
-    # Q007
-    # Orders with customer names
+    # ORDERS WITH CUSTOMER NAMES
     # ========================================================
 
     if (
@@ -329,7 +299,6 @@ def is_definitely_supported(
             )
         )
     ):
-
         if (
             has_columns(
                 schema,
@@ -353,15 +322,13 @@ def is_definitely_supported(
             return True
 
     # ========================================================
-    # Q008
-    # Stores in regions
+    # STORES IN REGIONS
     # ========================================================
 
     if (
         "store" in q
         and "region" in q
     ):
-
         if (
             has_columns(
                 schema,
@@ -385,23 +352,24 @@ def is_definitely_supported(
             return True
 
     # ========================================================
-    # Q009
-    # Orders in a specific year
+    # ORDERS IN SPECIFIC YEAR
     # ========================================================
 
     if (
         "order" in q
-        and (
-            "how many" in q
-            or "number of" in q
-            or "count" in q
+        and any(
+            phrase in q
+            for phrase in [
+                "how many",
+                "number of",
+                "count"
+            ]
         )
         and re.search(
             r"\b20\d{2}\b",
             q
         )
     ):
-
         if has_columns(
             schema,
             "orders",
@@ -413,8 +381,7 @@ def is_definitely_supported(
             return True
 
     # ========================================================
-    # Q010
-    # Revenue in a specific year
+    # REVENUE IN SPECIFIC YEAR
     # ========================================================
 
     if (
@@ -424,7 +391,6 @@ def is_definitely_supported(
             q
         )
     ):
-
         if has_columns(
             schema,
             "orders",
@@ -436,8 +402,7 @@ def is_definitely_supported(
             return True
 
     # ========================================================
-    # Q020
-    # Show all products
+    # SHOW ALL PRODUCTS
     # ========================================================
 
     if (
@@ -455,7 +420,6 @@ def is_definitely_supported(
             ]
         )
     ):
-
         if has_table(
             schema,
             "products"
@@ -463,7 +427,7 @@ def is_definitely_supported(
             return True
 
     # ========================================================
-    # Generic product listing
+    # GENERIC PRODUCT LISTING
     # ========================================================
 
     if (
@@ -483,15 +447,11 @@ def is_definitely_supported(
     ):
         return True
 
-    # ========================================================
-    # Nothing matched
-    # ========================================================
-
     return False
 
 
 # ============================================================
-# DETERMINISTIC UNSUPPORTED-QUESTION CHECK
+# DETERMINISTIC UNSUPPORTED CHECK
 # ============================================================
 
 def is_definitely_unsupported(
@@ -499,28 +459,27 @@ def is_definitely_unsupported(
     schema: dict
 ) -> bool:
     """
-    Detect questions that clearly request information that
-    does not exist in the database.
+    Detect questions that clearly request information
+    that does not exist in the database.
     """
 
     q = normalize_question(question)
 
     # ========================================================
-    # Employee happiness / satisfaction
+    # EMPLOYEE HAPPINESS
     # ========================================================
 
     if (
         "employee happiness" in q
         or "employee satisfaction" in q
     ):
-
-        employees_columns = get_columns(
+        employee_columns = get_columns(
             schema,
             "employees"
         )
 
         if not any(
-            column in employees_columns
+            column in employee_columns
             for column in [
                 "happiness_score",
                 "satisfaction_score",
@@ -531,21 +490,20 @@ def is_definitely_unsupported(
             return True
 
     # ========================================================
-    # Customer satisfaction / happiness
+    # CUSTOMER SATISFACTION
     # ========================================================
 
     if (
         "customer satisfaction" in q
         or "customer happiness" in q
     ):
-
-        customers_columns = get_columns(
+        customer_columns = get_columns(
             schema,
             "customers"
         )
 
         if not any(
-            column in customers_columns
+            column in customer_columns
             for column in [
                 "satisfaction_score",
                 "happiness_score",
@@ -556,7 +514,7 @@ def is_definitely_unsupported(
             return True
 
     # ========================================================
-    # Employee performance ratings
+    # EMPLOYEE PERFORMANCE
     # ========================================================
 
     if (
@@ -564,14 +522,13 @@ def is_definitely_unsupported(
         or "employee performance rating" in q
         or "employee performance ratings" in q
     ):
-
-        employees_columns = get_columns(
+        employee_columns = get_columns(
             schema,
             "employees"
         )
 
         if not any(
-            column in employees_columns
+            column in employee_columns
             for column in [
                 "performance_rating",
                 "performance_score",
@@ -582,11 +539,10 @@ def is_definitely_unsupported(
             return True
 
     # ========================================================
-    # employee_reviews table
+    # EMPLOYEE REVIEWS TABLE
     # ========================================================
 
     if "employee_reviews" in q:
-
         if not has_table(
             schema,
             "employee_reviews"
@@ -597,19 +553,162 @@ def is_definitely_unsupported(
 
 
 # ============================================================
+# DETERMINISTIC AMBIGUOUS OPTIONS
+# ============================================================
+
+def get_deterministic_clarification(
+    question: str
+) -> dict | None:
+    """
+    Return deterministic clarification responses for common
+    ambiguous business terms.
+
+    This avoids relying on the LLM to invent UI options.
+    """
+
+    q = normalize_question(question)
+
+    # ========================================================
+    # SALES
+    # ========================================================
+
+    if (
+        q == "show me sales."
+        or q == "show me sales"
+        or q == "sales"
+        or q == "show sales"
+        or "what are sales" in q
+    ):
+        return {
+            "intent": "AMBIGUOUS",
+            "needs_clarification": True,
+            "is_unsupported": False,
+            "reason": (
+                "The term 'sales' is ambiguous and could "
+                "refer to revenue, orders, or product sales."
+            ),
+            "question": (
+                "What do you mean by 'sales'?"
+            ),
+            "options": [
+                {
+                    "label": "Revenue",
+                    "description": (
+                        "Total monetary revenue from orders."
+                    )
+                },
+                {
+                    "label": "Orders",
+                    "description": (
+                        "Number of orders placed."
+                    )
+                },
+                {
+                    "label": "Product sales",
+                    "description": (
+                        "Products sold and their quantities."
+                    )
+                }
+            ]
+        }
+
+    # ========================================================
+    # BEST PRODUCTS
+    # ========================================================
+
+    if (
+        "best product" in q
+        or "best products" in q
+    ):
+        return {
+            "intent": "AMBIGUOUS",
+            "needs_clarification": True,
+            "is_unsupported": False,
+            "reason": (
+                "The term 'best products' is ambiguous "
+                "because products can be ranked by different metrics."
+            ),
+            "question": (
+                "How would you like to rank the products?"
+            ),
+            "options": [
+                {
+                    "label": "Revenue",
+                    "description": (
+                        "Rank products by total revenue."
+                    )
+                },
+                {
+                    "label": "Quantity sold",
+                    "description": (
+                        "Rank products by units sold."
+                    )
+                },
+                {
+                    "label": "Price",
+                    "description": (
+                        "Rank products by selling price."
+                    )
+                }
+            ]
+        }
+
+    # ========================================================
+    # BEST STORE
+    # ========================================================
+
+    if (
+        "best store" in q
+        or "best stores" in q
+        or "store is performing best" in q
+        or "stores are performing best" in q
+    ):
+        return {
+            "intent": "AMBIGUOUS",
+            "needs_clarification": True,
+            "is_unsupported": False,
+            "reason": (
+                "Store performance can be measured using "
+                "different metrics."
+            ),
+            "question": (
+                "How would you like to measure store performance?"
+            ),
+            "options": [
+                {
+                    "label": "Revenue",
+                    "description": (
+                        "Rank stores by total revenue."
+                    )
+                },
+                {
+                    "label": "Number of orders",
+                    "description": (
+                        "Rank stores by order count."
+                    )
+                }
+            ]
+        }
+
+    return None
+
+
+# ============================================================
 # FORMAT DATABASE SCHEMA
 # ============================================================
 
 def format_schema_for_llm(
     schema: dict
 ) -> str:
+    """
+    Convert database schema into compact text for Groq.
+    """
 
     lines = []
 
     for table_name in sorted(
         schema.keys()
     ):
-
         lines.append(
             f"TABLE: {table_name}"
         )
@@ -622,7 +721,6 @@ def format_schema_for_llm(
         )
 
         for column in columns:
-
             lines.append(
                 f"  - {column['name']} "
                 f"({column['type']})"
@@ -643,16 +741,15 @@ async def analyze_question(
     """
     Analyze a user question.
 
-    Deterministic supported/unsupported checks happen first.
-    Groq is used only for genuinely ambiguous questions.
+    Deterministic supported, unsupported, and common
+    clarification checks happen before Groq.
     """
 
     # ========================================================
-    # 1. Load database schema
+    # 1. Load schema
     # ========================================================
 
     try:
-
         schema = await get_database_schema()
 
     except Exception as exc:
@@ -672,14 +769,26 @@ async def analyze_question(
         }
 
     # ========================================================
-    # 2. Deterministic SUPPORTED
+    # 2. Known ambiguous questions
+    # ========================================================
+
+    deterministic_clarification = (
+        get_deterministic_clarification(
+            question
+        )
+    )
+
+    if deterministic_clarification:
+        return deterministic_clarification
+
+    # ========================================================
+    # 3. Definitely supported
     # ========================================================
 
     if is_definitely_supported(
         question,
         schema
     ):
-
         return {
             "intent": "CLEAR",
             "needs_clarification": False,
@@ -690,14 +799,13 @@ async def analyze_question(
         }
 
     # ========================================================
-    # 3. Deterministic UNSUPPORTED
+    # 4. Definitely unsupported
     # ========================================================
 
     if is_definitely_unsupported(
         question,
         schema
     ):
-
         return {
             "intent": "UNSUPPORTED",
             "needs_clarification": False,
@@ -711,7 +819,7 @@ async def analyze_question(
         }
 
     # ========================================================
-    # 4. Only now use Groq
+    # 5. Groq fallback
     # ========================================================
 
     schema_text = format_schema_for_llm(
@@ -752,11 +860,11 @@ answer the question directly or through:
 
 Derived metrics are supported.
 
-Revenue is supported when it can be calculated from:
+Revenue can be calculated from:
 
 orders.total_amount
 
-or, for product-level revenue:
+or product-level revenue can be calculated from:
 
 order_items.quantity
 order_items.unit_price
@@ -765,25 +873,15 @@ order_items.discount
 Examples of CLEAR questions:
 
 "What are the top 5 products by revenue?"
-
 "How many customers are there?"
-
 "How many orders were placed?"
-
 "What is the total revenue?"
-
 "What is the average product price?"
-
 "Show me all products."
-
 "Which products are in each category?"
-
 "Show the orders with customer names."
-
 "Which stores are located in each region?"
-
 "What was the revenue in 2025?"
-
 "How many orders were placed in 2025?"
 
 ============================================================
@@ -791,36 +889,48 @@ AMBIGUOUS
 ============================================================
 
 AMBIGUOUS means the database may contain relevant
-information, but the requested business meaning is unclear.
+information, but the user's intended metric or meaning
+is unclear.
 
 Examples:
 
 "Show me sales."
-
+"Which products are performing best?"
 "Which store is performing best?"
-
-"Show me the best products."
-
 "How are things looking?"
+
+For AMBIGUOUS questions ALWAYS provide useful options.
+
+For example, for "sales", options may include:
+
+[
+    {{
+        "label": "Revenue",
+        "description": "Total monetary revenue from orders."
+    }},
+    {{
+        "label": "Orders",
+        "description": "Number of orders placed."
+    }},
+    {{
+        "label": "Product sales",
+        "description": "Products sold and their quantities."
+    }}
+]
 
 ============================================================
 UNSUPPORTED
 ============================================================
 
 UNSUPPORTED means the requested information genuinely
-cannot be obtained from the database.
+cannot be obtained from the database schema.
 
 Examples:
 
 "What is the employee happiness score?"
-
 "What is the customer satisfaction score?"
-
 "Show me employee performance ratings."
-
 "What is the average customer happiness score?"
-
-"Show me data from employee_reviews."
 
 Do NOT classify something as unsupported merely because:
 
@@ -828,6 +938,10 @@ Do NOT classify something as unsupported merely because:
 - it requires aggregation
 - it requires a derived calculation
 - the exact metric is not stored physically
+
+============================================================
+OUTPUT
+============================================================
 
 Return ONLY valid JSON.
 
@@ -850,7 +964,12 @@ AMBIGUOUS:
     "is_unsupported": false,
     "reason": "short explanation",
     "question": "clarification question",
-    "options": []
+    "options": [
+        {{
+            "label": "short option",
+            "description": "meaning"
+        }}
+    ]
 }}
 
 UNSUPPORTED:
@@ -876,7 +995,7 @@ Return ONLY JSON.
 """
 
     # ========================================================
-    # 5. Groq call
+    # 6. Groq call
     # ========================================================
 
     try:
@@ -907,7 +1026,7 @@ Return ONLY JSON.
         }
 
     # ========================================================
-    # 6. Parse response
+    # 7. Parse Groq response
     # ========================================================
 
     try:
@@ -928,9 +1047,7 @@ Return ONLY JSON.
 
             response = response.strip()
 
-        result = __import__(
-            "json"
-        ).loads(
+        result = json.loads(
             response
         )
 
@@ -951,7 +1068,7 @@ Return ONLY JSON.
         }
 
     # ========================================================
-    # 7. Normalize intent
+    # 8. Normalize intent
     # ========================================================
 
     intent = str(
@@ -962,7 +1079,7 @@ Return ONLY JSON.
     ).upper().strip()
 
     # ========================================================
-    # 8. Validate intent
+    # 9. Validate intent
     # ========================================================
 
     if intent not in {
@@ -986,7 +1103,7 @@ Return ONLY JSON.
         }
 
     # ========================================================
-    # 9. CLEAR
+    # 10. CLEAR
     # ========================================================
 
     if intent == "CLEAR":
@@ -1001,7 +1118,7 @@ Return ONLY JSON.
         }
 
     # ========================================================
-    # 10. UNSUPPORTED
+    # 11. UNSUPPORTED
     # ========================================================
 
     if intent == "UNSUPPORTED":
@@ -1020,8 +1137,49 @@ Return ONLY JSON.
         }
 
     # ========================================================
-    # 11. AMBIGUOUS
+    # 12. AMBIGUOUS
     # ========================================================
+
+    options = result.get(
+        "options",
+        []
+    )
+
+    if not isinstance(
+        options,
+        list
+    ):
+        options = []
+
+    # Normalize malformed options returned by the LLM.
+    normalized_options = []
+
+    for option in options:
+
+        if not isinstance(
+            option,
+            dict
+        ):
+            continue
+
+        label = option.get(
+            "label"
+        )
+
+        description = option.get(
+            "description",
+            ""
+        )
+
+        if label:
+            normalized_options.append(
+                {
+                    "label": str(label),
+                    "description": str(
+                        description
+                    )
+                }
+            )
 
     return {
         "intent": "AMBIGUOUS",
@@ -1033,8 +1191,5 @@ Return ONLY JSON.
         "question": result.get(
             "question"
         ),
-        "options": result.get(
-            "options",
-            []
-        )
+        "options": normalized_options
     }

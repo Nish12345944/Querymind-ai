@@ -13,19 +13,29 @@ async def execute_readonly_sql(sql: str):
 
     sql = sql.strip()
 
-    # ---------------------------------------------------------
-    # 1. Basic SQL parsing
-    # ---------------------------------------------------------
+    # =========================================================
+    # 1. Empty SQL
+    # =========================================================
+
+    if not sql:
+        return {
+            "success": False,
+            "row_count": 0,
+            "rows": [],
+            "error": "SQL query cannot be empty."
+        }
+
+    # =========================================================
+    # 2. Parse SQL
+    # =========================================================
 
     try:
-
         statements = sqlglot.parse(
             sql,
             dialect="postgres"
         )
 
     except Exception as exc:
-
         return {
             "success": False,
             "row_count": 0,
@@ -33,12 +43,11 @@ async def execute_readonly_sql(sql: str):
             "error": f"Invalid SQL syntax: {str(exc)}"
         }
 
-    # ---------------------------------------------------------
-    # 2. Only one statement
-    # ---------------------------------------------------------
+    # =========================================================
+    # 3. Exactly one statement
+    # =========================================================
 
     if len(statements) != 1:
-
         return {
             "success": False,
             "row_count": 0,
@@ -48,12 +57,11 @@ async def execute_readonly_sql(sql: str):
 
     statement = statements[0]
 
-    # ---------------------------------------------------------
-    # 3. SELECT only
-    # ---------------------------------------------------------
+    # =========================================================
+    # 4. SELECT only
+    # =========================================================
 
     if not isinstance(statement, sqlglot.exp.Select):
-
         return {
             "success": False,
             "row_count": 0,
@@ -61,32 +69,20 @@ async def execute_readonly_sql(sql: str):
             "error": "Only SELECT statements are allowed."
         }
 
-    # ---------------------------------------------------------
-    # 4. Enforce maximum result size
-    #
-    # IMPORTANT:
-    # Do NOT overwrite an existing LIMIT.
-    #
-    # Example:
-    #
-    #     LIMIT 5
-    #
-    # must remain LIMIT 5.
-    #
-    # Only add LIMIT 100 when the query has no LIMIT.
-    # ---------------------------------------------------------
+    # =========================================================
+    # 5. Add LIMIT only when missing
+    # =========================================================
 
     if statement.args.get("limit") is None:
-
         statement = statement.limit(MAX_ROWS)
 
     safe_sql = statement.sql(
         dialect="postgres"
     )
 
-    # ---------------------------------------------------------
-    # 5. Execute with timeout
-    # ---------------------------------------------------------
+    # =========================================================
+    # 6. Execute query
+    # =========================================================
 
     async with AsyncSessionLocal() as session:
 
@@ -104,13 +100,6 @@ async def execute_readonly_sql(sql: str):
             )
 
             rows = result.mappings().all()
-
-            # -------------------------------------------------
-            # Safety guard
-            #
-            # Existing LIMIT values are preserved, but never
-            # allow more than MAX_ROWS to leave the service.
-            # -------------------------------------------------
 
             rows = rows[:MAX_ROWS]
 

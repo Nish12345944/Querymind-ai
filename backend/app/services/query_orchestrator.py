@@ -1,3 +1,5 @@
+import logging
+import time
 import uuid
 
 from app.services.clarification_service import (
@@ -26,12 +28,109 @@ from app.services.answer_service import (
     generate_answer
 )
 
+from app.services.query_history_service import (
+    save_query_history
+)
+
+from app.services.intent_router import (
+    IntentType,
+    route_intent
+)
+
 
 # ============================================================
-# PROCESS NEW QUERY
+# LOGGER
 # ============================================================
 
-async def process_query(
+logger = logging.getLogger(__name__)
+
+
+# ============================================================
+# LOGGING HELPER
+# ============================================================
+
+def _log_stage(
+    request_id: str,
+    stage: str,
+    status: str,
+    start_time: float,
+    **extra
+):
+    """
+    Log one pipeline stage with execution time.
+
+    This helper intentionally avoids logging SQL results,
+    database rows, API keys, or other potentially sensitive
+    information.
+    """
+
+    duration_ms = round(
+        (time.perf_counter() - start_time) * 1000,
+        2
+    )
+
+    log_data = {
+        "request_id": request_id,
+        "stage": stage,
+        "status": status,
+        "duration_ms": duration_ms
+    }
+
+    log_data.update(extra)
+
+    logger.info(
+        "QueryMind pipeline | %s",
+        log_data
+    )
+
+
+# ============================================================
+# SAVE QUERY HISTORY
+# ============================================================
+
+async def _save_history(
+    *,
+    request_id: str,
+    question: str,
+    sql: str | None = None,
+    status: str,
+    row_count: int = 0,
+    answer: str | None = None,
+    error: str | None = None,
+    duration_ms: float | None = None,
+):
+    """
+    Persist query execution history.
+
+    History persistence must never break the main query pipeline.
+    """
+
+    try:
+
+        await save_query_history(
+            request_id=request_id,
+            question=question,
+            sql=sql,
+            status=status,
+            row_count=row_count,
+            answer=answer,
+            error=error,
+            duration_ms=duration_ms,
+        )
+
+    except Exception:
+
+        logger.exception(
+            "Failed to persist query history | request_id=%s",
+            request_id,
+        )
+
+
+# ============================================================
+# INTERNAL QUERY PIPELINE
+# ============================================================
+
+async def _process_query(
     question: str
 ):
     """
@@ -43,47 +142,91 @@ async def process_query(
           ↓
     Intent Classification
           ↓
-    ┌──────────────┬───────────────┬──────────────┐
-    │              │               │
-    CLEAR      AMBIGUOUS      UNSUPPORTED
-    │              │               │
-    ↓              ↓               ↓
-    SQL         Clarify          Reject
-    │
-    ↓
+    ┌──────────────┬──────────────┬──────────────┐
+    CLEAR          AMBIGUOUS      UNSUPPORTED
+      │                │               │
+      ↓                ↓               ↓
+    SQL             Clarify          Reject
+      │
+      ↓
     Schema RAG
-    │
-    ↓
+      │
+      ↓
     Groq
-    │
-    ↓
+      │
+      ↓
     SQL Validation
-    │
-    ↓
+      │
+      ↓
     Read-only PostgreSQL
-    │
-    ↓
+      │
+      ↓
     Natural-language answer
     """
+
+    request_id = str(uuid.uuid4())
+
+    logger.info(
+        "QueryMind request started | request_id=%s",
+        request_id
+    )
 
     # ========================================================
     # 1. Analyze user intent
     # ========================================================
 
-    intent = await analyze_question(
-        question
-    )
+    stage_start = time.perf_counter()
 
-    intent_type = intent.get(
-        "intent",
-        "AMBIGUOUS"
-    )
+    try:
+
+        intent = await analyze_question(
+            question
+        )
+
+        # ----------------------------------------------------
+        # Route intent through centralized Intent Router
+        # ----------------------------------------------------
+
+        intent_type = route_intent(
+            intent
+        )
+
+        _log_stage(
+            request_id,
+            "intent_analysis",
+            "success",
+            stage_start,
+            intent=intent_type.value
+        )
+
+    except Exception as exc:
+
+        _log_stage(
+            request_id,
+            "intent_analysis",
+            "failed",
+            stage_start,
+            error=str(exc)
+        )
+
+        return {
+            "status": "error",
+            "question": question,
+            "reason": str(exc)
+        }
 
     # ========================================================
     # 2. UNSUPPORTED
     # ========================================================
 
-    if intent_type == "UNSUPPORTED":
+    if intent_type == IntentType.UNSUPPORTED:
+
+        _log_stage(
+            request_id,
+            "intent_analysis",
+            "unsupported",
+            stage_start
+        )
 
         return {
             "status": "unsupported",
@@ -99,7 +242,7 @@ async def process_query(
     # 3. AMBIGUOUS
     # ========================================================
 
-    if intent_type == "AMBIGUOUS":
+    if intent_type == IntentType.AMBIGUOUS:
 
         conversation_id = str(
             uuid.uuid4()
@@ -114,6 +257,13 @@ async def process_query(
             conversation_id,
             clarification=intent,
             status="awaiting_clarification"
+        )
+
+        logger.info(
+            "QueryMind clarification required | "
+            "request_id=%s conversation_id=%s",
+            request_id,
+            conversation_id
         )
 
         return {
@@ -135,7 +285,13 @@ async def process_query(
     # 4. CLEAR
     # ========================================================
 
-    if intent_type != "CLEAR":
+    if intent_type != IntentType.CLEAR:
+
+        logger.warning(
+            "QueryMind unknown intent | request_id=%s intent=%s",
+            request_id,
+            intent_type
+        )
 
         return {
             "status": "error",
@@ -150,13 +306,30 @@ async def process_query(
     # 5. Generate SQL
     # ========================================================
 
+    stage_start = time.perf_counter()
+
     try:
 
         sql_result = await generate_sql(
             question=question
         )
 
+        _log_stage(
+            request_id,
+            "sql_generation",
+            "success",
+            stage_start
+        )
+
     except Exception as exc:
+
+        _log_stage(
+            request_id,
+            "sql_generation",
+            "failed",
+            stage_start,
+            error=str(exc)
+        )
 
         return {
             "status": "sql_generation_failed",
@@ -164,14 +337,20 @@ async def process_query(
             "error": str(exc)
         }
 
-    # --------------------------------------------------------
-    # Make sure SQL generation returned the expected structure
-    # --------------------------------------------------------
+    # ========================================================
+    # 5.1 Validate SQL generator response structure
+    # ========================================================
 
     if not isinstance(
         sql_result,
         dict
     ):
+
+        logger.error(
+            "SQL generator returned invalid response | "
+            "request_id=%s",
+            request_id
+        )
 
         return {
             "status": "sql_generation_failed",
@@ -188,6 +367,11 @@ async def process_query(
 
     if not sql:
 
+        logger.error(
+            "SQL generator returned no SQL | request_id=%s",
+            request_id
+        )
+
         return {
             "status": "sql_generation_failed",
             "question": question,
@@ -198,10 +382,16 @@ async def process_query(
         }
 
     # ========================================================
-    # 6. Handle unsupported SQL generated by the model
+    # 6. Handle unsupported SQL generated by model
     # ========================================================
 
     if sql.strip().upper() == "UNSUPPORTED":
+
+        logger.info(
+            "SQL generation determined query unsupported | "
+            "request_id=%s",
+            request_id
+        )
 
         return {
             "status": "unsupported",
@@ -217,13 +407,32 @@ async def process_query(
     # 7. Validate generated SQL
     # ========================================================
 
+    stage_start = time.perf_counter()
+
     try:
 
         validation = await validate_sql(
             sql
         )
 
+        _log_stage(
+            request_id,
+            "sql_validation",
+            "success"
+            if validation.get("valid")
+            else "rejected",
+            stage_start
+        )
+
     except Exception as exc:
+
+        _log_stage(
+            request_id,
+            "sql_validation",
+            "failed",
+            stage_start,
+            error=str(exc)
+        )
 
         return {
             "status": "sql_validation_failed",
@@ -256,13 +465,36 @@ async def process_query(
     # 9. Execute validated SQL
     # ========================================================
 
+    stage_start = time.perf_counter()
+
     try:
 
         execution = await execute_readonly_sql(
             sql
         )
 
+        _log_stage(
+            request_id,
+            "sql_execution",
+            "success"
+            if execution.get("success")
+            else "failed",
+            stage_start,
+            row_count=execution.get(
+                "row_count",
+                0
+            )
+        )
+
     except Exception as exc:
+
+        _log_stage(
+            request_id,
+            "sql_execution",
+            "failed",
+            stage_start,
+            error=str(exc)
+        )
 
         return {
             "status": "execution_failed",
@@ -296,6 +528,8 @@ async def process_query(
     # 11. Generate natural-language answer
     # ========================================================
 
+    stage_start = time.perf_counter()
+
     try:
 
         answer = await generate_answer(
@@ -307,7 +541,22 @@ async def process_query(
             )
         )
 
+        _log_stage(
+            request_id,
+            "answer_generation",
+            "success",
+            stage_start
+        )
+
     except Exception as exc:
+
+        _log_stage(
+            request_id,
+            "answer_generation",
+            "failed",
+            stage_start,
+            error=str(exc)
+        )
 
         return {
             "status": "answer_generation_failed",
@@ -328,6 +577,16 @@ async def process_query(
     # ========================================================
     # 12. Return final result
     # ========================================================
+
+    logger.info(
+        "QueryMind request completed | "
+        "request_id=%s row_count=%s",
+        request_id,
+        execution.get(
+            "row_count",
+            0
+        )
+    )
 
     return {
         "status": "query_executed",
@@ -351,6 +610,83 @@ async def process_query(
 
 
 # ============================================================
+# PUBLIC QUERY ENTRYPOINT WITH HISTORY
+# ============================================================
+
+async def process_query(
+    question: str
+):
+    """
+    Public query entrypoint.
+
+    Executes the existing QueryMind pipeline and persists
+    the final pipeline outcome to query_history.
+    """
+
+    request_id = str(
+        uuid.uuid4()
+    )
+
+    start_time = time.perf_counter()
+
+    try:
+
+        result = await _process_query(
+            question
+        )
+
+    except Exception as exc:
+
+        duration_ms = round(
+            (
+                time.perf_counter()
+                - start_time
+            ) * 1000,
+            2
+        )
+
+        await _save_history(
+            request_id=request_id,
+            question=question,
+            status="error",
+            error=str(exc),
+            duration_ms=duration_ms,
+        )
+
+        raise
+
+    duration_ms = round(
+        (
+            time.perf_counter()
+            - start_time
+        ) * 1000,
+        2
+    )
+
+    await _save_history(
+        request_id=request_id,
+        question=question,
+        sql=result.get("sql"),
+        status=result.get(
+            "status",
+            "unknown"
+        ),
+        row_count=result.get(
+            "row_count"
+        ) or 0,
+        answer=result.get(
+            "answer"
+        ),
+        error=result.get(
+            "error"
+        ),
+        duration_ms=duration_ms,
+    )
+
+    return result
+
+
+# ============================================================
 # PROCESS CLARIFICATION
 # ============================================================
 
@@ -363,6 +699,17 @@ async def process_clarification(
     a clarification question.
     """
 
+    request_id = str(
+        uuid.uuid4()
+    )
+
+    logger.info(
+        "QueryMind clarification request started | "
+        "request_id=%s conversation_id=%s",
+        request_id,
+        conversation_id
+    )
+
     # ========================================================
     # 1. Retrieve conversation
     # ========================================================
@@ -372,6 +719,13 @@ async def process_clarification(
     )
 
     if conversation is None:
+
+        logger.warning(
+            "Conversation not found | "
+            "request_id=%s conversation_id=%s",
+            request_id,
+            conversation_id
+        )
 
         return {
             "status": "error",
@@ -425,13 +779,30 @@ async def process_clarification(
     # 5. Generate SQL
     # ========================================================
 
+    stage_start = time.perf_counter()
+
     try:
 
         sql_result = await generate_sql(
             question=clarified_question
         )
 
+        _log_stage(
+            request_id,
+            "clarification_sql_generation",
+            "success",
+            stage_start
+        )
+
     except Exception as exc:
+
+        _log_stage(
+            request_id,
+            "clarification_sql_generation",
+            "failed",
+            stage_start,
+            error=str(exc)
+        )
 
         update_conversation(
             conversation_id,
@@ -444,6 +815,10 @@ async def process_clarification(
             "conversation_id": conversation_id,
             "error": str(exc)
         }
+
+    # ========================================================
+    # 5.1 Validate SQL generator response
+    # ========================================================
 
     if not isinstance(
         sql_result,
@@ -513,13 +888,32 @@ async def process_clarification(
     # 7. Validate generated SQL
     # ========================================================
 
+    stage_start = time.perf_counter()
+
     try:
 
         validation = await validate_sql(
             sql
         )
 
+        _log_stage(
+            request_id,
+            "clarification_sql_validation",
+            "success"
+            if validation.get("valid")
+            else "rejected",
+            stage_start
+        )
+
     except Exception as exc:
+
+        _log_stage(
+            request_id,
+            "clarification_sql_validation",
+            "failed",
+            stage_start,
+            error=str(exc)
+        )
 
         update_conversation(
             conversation_id,
@@ -566,13 +960,36 @@ async def process_clarification(
     # 9. Execute validated SQL
     # ========================================================
 
+    stage_start = time.perf_counter()
+
     try:
 
         execution = await execute_readonly_sql(
             sql
         )
 
+        _log_stage(
+            request_id,
+            "clarification_sql_execution",
+            "success"
+            if execution.get("success")
+            else "failed",
+            stage_start,
+            row_count=execution.get(
+                "row_count",
+                0
+            )
+        )
+
     except Exception as exc:
+
+        _log_stage(
+            request_id,
+            "clarification_sql_execution",
+            "failed",
+            stage_start,
+            error=str(exc)
+        )
 
         update_conversation(
             conversation_id,
@@ -620,6 +1037,8 @@ async def process_clarification(
     # 11. Generate final answer
     # ========================================================
 
+    stage_start = time.perf_counter()
+
     try:
 
         final_answer = await generate_answer(
@@ -631,7 +1050,22 @@ async def process_clarification(
             )
         )
 
+        _log_stage(
+            request_id,
+            "clarification_answer_generation",
+            "success",
+            stage_start
+        )
+
     except Exception as exc:
+
+        _log_stage(
+            request_id,
+            "clarification_answer_generation",
+            "failed",
+            stage_start,
+            error=str(exc)
+        )
 
         update_conversation(
             conversation_id,
@@ -679,6 +1113,17 @@ async def process_clarification(
     # ========================================================
     # 13. Return final result
     # ========================================================
+
+    logger.info(
+        "QueryMind clarification completed | "
+        "request_id=%s conversation_id=%s row_count=%s",
+        request_id,
+        conversation_id,
+        execution.get(
+            "row_count",
+            0
+        )
+    )
 
     return {
         "status": "completed",
