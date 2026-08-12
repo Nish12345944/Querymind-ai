@@ -1,13 +1,531 @@
 import sqlglot
 from sqlglot import exp
 
-from app.services.schema_service import (
-    get_database_schema
-)
 
-from app.services.relationship_validator import (
-    get_valid_relationships
-)
+# ============================================================
+# QUERYMIND DATABASE SCHEMA
+# ============================================================
+
+DATABASE_SCHEMA = {
+    "customers": {
+        "customer_id",
+        "first_name",
+        "last_name",
+        "email",
+        "city",
+        "region_id",
+        "registration_date",
+        "customer_segment",
+    },
+
+    "orders": {
+        "order_id",
+        "customer_id",
+        "store_id",
+        "order_date",
+        "order_status",
+        "sales_channel",
+        "total_amount",
+    },
+
+    "order_items": {
+        "order_item_id",
+        "order_id",
+        "product_id",
+        "quantity",
+        "unit_price",
+        "discount",
+    },
+
+    "products": {
+        "product_id",
+        "product_name",
+        "category_id",
+        "supplier_id",
+        "unit_price",
+        "cost_price",
+        "launch_date",
+        "status",
+    },
+
+    "categories": {
+        "category_id",
+        "category_name",
+    },
+
+    "suppliers": {
+        "supplier_id",
+        "supplier_name",
+        "region_id",
+        "rating",
+    },
+
+    "stores": {
+        "store_id",
+        "store_name",
+        "region_id",
+    },
+
+    "regions": {
+        "region_id",
+        "region_name",
+    },
+
+    "inventory": {
+        "inventory_id",
+        "product_id",
+        "store_id",
+        "quantity_available",
+        "reorder_level",
+        "last_restocked",
+    },
+
+    "payments": {
+        "payment_id",
+        "order_id",
+        "payment_date",
+        "payment_method",
+        "amount",
+        "payment_status",
+    },
+
+    "returns": {
+        "return_id",
+        "order_id",
+        "product_id",
+        "return_date",
+        "quantity",
+        "reason",
+        "refund_amount",
+    },
+
+    "shipments": {
+        "shipment_id",
+        "order_id",
+        "shipment_date",
+        "delivery_date",
+        "shipping_method",
+        "shipping_status",
+    },
+
+    "employees": {
+        "employee_id",
+        "first_name",
+        "last_name",
+        "store_id",
+        "role",
+        "hire_date",
+    },
+}
+
+
+# ============================================================
+# VALID FOREIGN-KEY RELATIONSHIPS
+# ============================================================
+
+VALID_RELATIONSHIPS = {
+    (
+        ("orders", "customer_id"),
+        ("customers", "customer_id"),
+    ),
+
+    (
+        ("customers", "customer_id"),
+        ("orders", "customer_id"),
+    ),
+
+    (
+        ("orders", "store_id"),
+        ("stores", "store_id"),
+    ),
+
+    (
+        ("stores", "store_id"),
+        ("orders", "store_id"),
+    ),
+
+    (
+        ("order_items", "order_id"),
+        ("orders", "order_id"),
+    ),
+
+    (
+        ("orders", "order_id"),
+        ("order_items", "order_id"),
+    ),
+
+    (
+        ("order_items", "product_id"),
+        ("products", "product_id"),
+    ),
+
+    (
+        ("products", "product_id"),
+        ("order_items", "product_id"),
+    ),
+
+    (
+        ("products", "category_id"),
+        ("categories", "category_id"),
+    ),
+
+    (
+        ("categories", "category_id"),
+        ("products", "category_id"),
+    ),
+
+    (
+        ("products", "supplier_id"),
+        ("suppliers", "supplier_id"),
+    ),
+
+    (
+        ("suppliers", "supplier_id"),
+        ("products", "supplier_id"),
+    ),
+
+    (
+        ("stores", "region_id"),
+        ("regions", "region_id"),
+    ),
+
+    (
+        ("regions", "region_id"),
+        ("stores", "region_id"),
+    ),
+
+    (
+        ("inventory", "product_id"),
+        ("products", "product_id"),
+    ),
+
+    (
+        ("products", "product_id"),
+        ("inventory", "product_id"),
+    ),
+
+    (
+        ("inventory", "store_id"),
+        ("stores", "store_id"),
+    ),
+
+    (
+        ("stores", "store_id"),
+        ("inventory", "store_id"),
+    ),
+
+    (
+        ("payments", "order_id"),
+        ("orders", "order_id"),
+    ),
+
+    (
+        ("orders", "order_id"),
+        ("payments", "order_id"),
+    ),
+
+    (
+        ("returns", "order_id"),
+        ("orders", "order_id"),
+    ),
+
+    (
+        ("orders", "order_id"),
+        ("returns", "order_id"),
+    ),
+
+    (
+        ("returns", "product_id"),
+        ("products", "product_id"),
+    ),
+
+    (
+        ("products", "product_id"),
+        ("returns", "product_id"),
+    ),
+
+    (
+        ("shipments", "order_id"),
+        ("orders", "order_id"),
+    ),
+
+    (
+        ("orders", "order_id"),
+        ("shipments", "order_id"),
+    ),
+
+    (
+        ("customers", "region_id"),
+        ("regions", "region_id"),
+    ),
+
+    (
+        ("regions", "region_id"),
+        ("customers", "region_id"),
+    ),
+
+    (
+        ("suppliers", "region_id"),
+        ("regions", "region_id"),
+    ),
+
+    (
+        ("regions", "region_id"),
+        ("suppliers", "region_id"),
+    ),
+
+    (
+        ("employees", "store_id"),
+        ("stores", "store_id"),
+    ),
+
+    (
+        ("stores", "store_id"),
+        ("employees", "store_id"),
+    ),
+}
+
+
+# ============================================================
+# CHECK STRUCTURE
+# ============================================================
+
+def make_checks(
+    syntax=True,
+    single_statement=True,
+    select_only=True,
+    tables=True,
+    columns=True,
+    join_relationships=True,
+):
+    return {
+        "syntax": syntax,
+        "single_statement": single_statement,
+        "select_only": select_only,
+        "tables": tables,
+        "columns": columns,
+        "join_relationships": join_relationships,
+    }
+
+
+# ============================================================
+# SELECT ALIAS COLLECTION
+# ============================================================
+
+def collect_select_aliases(statement):
+
+    aliases = set()
+
+    for expression in statement.expressions:
+
+        alias = expression.alias
+
+        if alias:
+            aliases.add(
+                alias.lower()
+            )
+
+    return aliases
+
+
+# ============================================================
+# TABLE ALIAS MAP
+# ============================================================
+
+def collect_table_aliases(statement):
+
+    aliases = {}
+
+    for table in statement.find_all(
+        exp.Table
+    ):
+
+        actual_table = table.name.lower()
+
+        alias = table.alias_or_name.lower()
+
+        aliases[alias] = actual_table
+
+        # Also allow direct table references.
+        aliases[actual_table] = actual_table
+
+    return aliases
+
+
+# ============================================================
+# TABLE VALIDATION
+# ============================================================
+
+def validate_tables(statement):
+
+    referenced_tables = set()
+
+    for table in statement.find_all(
+        exp.Table
+    ):
+
+        referenced_tables.add(
+            table.name.lower()
+        )
+
+    unknown_tables = (
+        referenced_tables
+        - set(DATABASE_SCHEMA.keys())
+    )
+
+    if unknown_tables:
+
+        return {
+            "valid": False,
+            "reason": (
+                "Unknown table(s): "
+                + ", ".join(
+                    sorted(unknown_tables)
+                )
+            ),
+            "referenced_tables": referenced_tables,
+        }
+
+    return {
+        "valid": True,
+        "reason": "All tables are valid.",
+        "referenced_tables": referenced_tables,
+    }
+
+
+# ============================================================
+# COLUMN VALIDATION
+# ============================================================
+
+def validate_columns(
+    statement,
+    aliases,
+    select_aliases,
+):
+
+    referenced_tables = {
+        table.name.lower()
+        for table in statement.find_all(
+            exp.Table
+        )
+    }
+
+    all_available_columns = set()
+
+    for table_name in referenced_tables:
+
+        all_available_columns.update(
+            DATABASE_SCHEMA.get(
+                table_name,
+                set()
+            )
+        )
+
+    all_available_columns = {
+        column.lower()
+        for column in all_available_columns
+    }
+
+    unknown_columns = []
+
+    for column in statement.find_all(
+        exp.Column
+    ):
+
+        column_name = column.name.lower()
+
+        # ----------------------------------------------------
+        # SELECT *
+        # ----------------------------------------------------
+
+        if column_name == "*":
+            continue
+
+        table_reference = (
+            column.table or ""
+        ).lower()
+
+        # ----------------------------------------------------
+        # SELECT alias
+        #
+        # Example:
+        #
+        # ORDER BY revenue DESC
+        # ----------------------------------------------------
+
+        if (
+            not table_reference
+            and column_name in select_aliases
+        ):
+            continue
+
+        # ----------------------------------------------------
+        # Qualified column
+        # ----------------------------------------------------
+
+        if table_reference:
+
+            actual_table = aliases.get(
+                table_reference
+            )
+
+            if actual_table is None:
+
+                unknown_columns.append(
+                    f"{table_reference}.{column_name}"
+                )
+
+                continue
+
+            valid_columns = {
+                value.lower()
+                for value in DATABASE_SCHEMA.get(
+                    actual_table,
+                    set()
+                )
+            }
+
+            if column_name not in valid_columns:
+
+                unknown_columns.append(
+                    f"{actual_table}.{column_name}"
+                )
+
+        # ----------------------------------------------------
+        # Unqualified column
+        # ----------------------------------------------------
+
+        else:
+
+            if (
+                column_name
+                not in all_available_columns
+            ):
+
+                unknown_columns.append(
+                    column_name
+                )
+
+    if unknown_columns:
+
+        return {
+            "valid": False,
+            "reason": (
+                "Unknown column(s): "
+                + ", ".join(
+                    sorted(
+                        set(
+                            unknown_columns
+                        )
+                    )
+                )
+            ),
+        }
+
+    return {
+        "valid": True,
+        "reason": "All columns are valid.",
+    }
 
 
 # ============================================================
@@ -16,36 +534,33 @@ from app.services.relationship_validator import (
 
 def validate_join_relationships(
     statement,
-    valid_relationships
+    aliases,
 ):
-    """
-    Validate that JOIN conditions correspond to
-    actual foreign-key relationships in the database.
-    """
 
-    aliases = {}
+    for join in statement.find_all(
+        exp.Join
+    ):
 
-    for table in statement.find_all(exp.Table):
+        on_expression = join.args.get(
+            "on"
+        )
 
-        aliases[table.alias_or_name] = table.name
-
-    for join in statement.find_all(exp.Join):
-
-        if join.args.get("on") is None:
+        # JOIN must have an ON condition.
+        if on_expression is None:
 
             return {
                 "valid": False,
                 "reason": (
                     "JOIN without an ON condition "
                     "is not allowed."
-                )
+                ),
             }
-
-        on_expression = join.args["on"]
 
         found_valid_relationship = False
 
-        for equality in on_expression.find_all(exp.EQ):
+        for equality in on_expression.find_all(
+            exp.EQ
+        ):
 
             left = equality.left
             right = equality.right
@@ -62,8 +577,13 @@ def validate_join_relationships(
             ):
                 continue
 
-            left_alias = left.table
-            right_alias = right.table
+            left_alias = (
+                left.table or ""
+            ).lower()
+
+            right_alias = (
+                right.table or ""
+            ).lower()
 
             left_table = aliases.get(
                 left_alias
@@ -73,27 +593,26 @@ def validate_join_relationships(
                 right_alias
             )
 
-            if not left_table or not right_table:
-
+            if (
+                left_table is None
+                or right_table is None
+            ):
                 continue
-
-            left_column = left.name
-            right_column = right.name
 
             left_reference = (
                 left_table,
-                left_column
+                left.name.lower()
             )
 
             right_reference = (
                 right_table,
-                right_column
+                right.name.lower()
             )
 
             if (
                 left_reference,
                 right_reference
-            ) in valid_relationships:
+            ) in VALID_RELATIONSHIPS:
 
                 found_valid_relationship = True
                 break
@@ -105,90 +624,15 @@ def validate_join_relationships(
                 "reason": (
                     "JOIN does not match a known "
                     "database relationship."
-                )
+                ),
             }
 
     return {
         "valid": True,
         "reason": (
             "JOIN relationships are valid."
-        )
+        ),
     }
-
-
-# ============================================================
-# COLLECT SELECT ALIASES
-# ============================================================
-
-def collect_select_aliases(
-    statement
-):
-    """
-    Collect aliases created in the SELECT list.
-
-    Example:
-
-        SUM(oi.quantity * oi.unit_price) AS revenue
-
-    creates the valid SQL alias:
-
-        revenue
-
-    PostgreSQL allows that alias to be referenced by
-    ORDER BY, so the validator must not treat it as an
-    unknown database column.
-    """
-
-    aliases = set()
-
-    for expression in statement.expressions:
-
-        if not isinstance(
-            expression,
-            exp.Expression
-        ):
-            continue
-
-        alias = expression.alias
-
-        if alias:
-
-            aliases.add(
-                alias
-            )
-
-    return aliases
-
-
-# ============================================================
-# CHECK WHETHER A COLUMN IS A SELECT ALIAS
-# ============================================================
-
-def is_select_alias_reference(
-    column,
-    select_aliases
-):
-    """
-    Determine whether an unqualified column reference
-    corresponds to a SELECT alias.
-
-    Example:
-
-        SELECT
-            SUM(...) AS revenue
-        FROM order_items
-        ORDER BY revenue DESC
-
-    'revenue' in ORDER BY is a SELECT alias.
-    """
-
-    if column.table:
-
-        return False
-
-    return (
-        column.name in select_aliases
-    )
 
 
 # ============================================================
@@ -198,41 +642,39 @@ def is_select_alias_reference(
 async def validate_sql(
     sql: str
 ):
-    """
-    Validate generated SQL before execution.
-
-    Validation includes:
-
-    1. Empty query detection
-    2. UNSUPPORTED detection
-    3. SQL syntax validation
-    4. Single-statement validation
-    5. SELECT-only validation
-    6. Dangerous-operation detection
-    7. Table validation
-    8. Column validation
-    9. SELECT-alias validation
-    10. JOIN relationship validation
-    """
 
     # ========================================================
-    # 1. Clean SQL
+    # 1. Normalize input
     # ========================================================
 
-    sql = sql.strip()
+    if sql is None:
+        sql = ""
+
+    sql = str(
+        sql
+    ).strip()
+
+    # ========================================================
+    # 2. Empty SQL
+    # ========================================================
 
     if not sql:
 
         return {
             "valid": False,
             "reason": "Empty SQL query.",
-            "checks": {
-                "syntax": False
-            }
+            "checks": make_checks(
+                syntax=False,
+                single_statement=True,
+                select_only=True,
+                tables=True,
+                columns=True,
+                join_relationships=True,
+            ),
         }
 
     # ========================================================
-    # 2. Handle UNSUPPORTED response
+    # 3. UNSUPPORTED
     # ========================================================
 
     if sql.upper() == "UNSUPPORTED":
@@ -245,11 +687,11 @@ async def validate_sql(
             ),
             "checks": {
                 "unsupported": True
-            }
+            },
         }
 
     # ========================================================
-    # 3. Parse SQL
+    # 4. Parse SQL
     # ========================================================
 
     try:
@@ -266,13 +708,18 @@ async def validate_sql(
             "reason": (
                 f"SQL syntax error: {str(exc)}"
             ),
-            "checks": {
-                "syntax": False
-            }
+            "checks": make_checks(
+                syntax=False,
+                single_statement=True,
+                select_only=True,
+                tables=True,
+                columns=True,
+                join_relationships=True,
+            ),
         }
 
     # ========================================================
-    # 4. Only one statement allowed
+    # 5. Exactly one statement
     # ========================================================
 
     if len(statements) != 1:
@@ -280,19 +727,22 @@ async def validate_sql(
         return {
             "valid": False,
             "reason": (
-                "Only one SQL statement "
-                "is allowed."
+                "Only one SQL statement is allowed."
             ),
-            "checks": {
-                "syntax": True,
-                "single_statement": False
-            }
+            "checks": make_checks(
+                syntax=True,
+                single_statement=False,
+                select_only=True,
+                tables=True,
+                columns=True,
+                join_relationships=True,
+            ),
         }
 
     statement = statements[0]
 
     # ========================================================
-    # 5. SELECT only
+    # 6. SELECT only
     # ========================================================
 
     if not isinstance(
@@ -303,18 +753,24 @@ async def validate_sql(
         return {
             "valid": False,
             "reason": (
-                "Only SELECT statements "
-                "are allowed."
+                "Only SELECT statements are allowed."
             ),
-            "checks": {
-                "syntax": True,
-                "single_statement": True,
-                "select_only": False
-            }
+            "checks": make_checks(
+                syntax=True,
+                single_statement=True,
+                select_only=False,
+                tables=True,
+                columns=True,
+                join_relationships=True,
+            ),
         }
 
     # ========================================================
-    # 6. Detect forbidden SQL operations
+    # 7. Reject dangerous operations
+    # ========================================================
+    #
+    # We use node type names rather than version-specific
+    # SQLGlot classes.
     # ========================================================
 
     forbidden_node_types = {
@@ -322,18 +778,20 @@ async def validate_sql(
         "Update",
         "Delete",
         "Drop",
-        "Create",
         "Alter",
+        "Create",
         "Merge",
         "Grant",
         "Revoke",
         "Truncate",
-        "TruncateTable"
+        "TruncateTable",
     }
 
     for node in statement.walk():
 
-        node_type = type(node).__name__
+        node_type = type(
+            node
+        ).__name__
 
         if node_type in forbidden_node_types:
 
@@ -343,130 +801,49 @@ async def validate_sql(
                     "Forbidden SQL operation: "
                     f"{node_type}"
                 ),
-                "checks": {
-                    "syntax": True,
-                    "single_statement": True,
-                    "select_only": True,
-                    "forbidden_operations": False
-                }
+                "checks": make_checks(
+                    syntax=True,
+                    single_statement=True,
+                    select_only=False,
+                    tables=True,
+                    columns=True,
+                    join_relationships=True,
+                ),
             }
 
     # ========================================================
-    # 7. Load actual database schema
+    # 8. Validate tables
     # ========================================================
 
-    try:
+    table_result = validate_tables(
+        statement
+    )
 
-        schema = await get_database_schema()
-
-    except Exception as exc:
+    if not table_result["valid"]:
 
         return {
             "valid": False,
-            "reason": (
-                "Could not load database schema: "
-                f"{str(exc)}"
+            "reason": table_result["reason"],
+            "checks": make_checks(
+                syntax=True,
+                single_statement=True,
+                select_only=True,
+                tables=False,
+                columns=True,
+                join_relationships=True,
             ),
-            "checks": {
-                "syntax": True,
-                "single_statement": True,
-                "select_only": True,
-                "schema_loaded": False
-            }
         }
 
     # ========================================================
-    # 8. Get valid table names
+    # 9. Collect aliases
     # ========================================================
 
-    valid_tables = set(
-        schema.keys()
+    aliases = collect_table_aliases(
+        statement
     )
 
     # ========================================================
-    # 9. Build table -> columns mapping
-    # ========================================================
-
-    table_columns = {}
-
-    for table_name, table_info in schema.items():
-
-        table_columns[table_name] = {
-            column["name"]
-            for column in table_info.get(
-                "columns",
-                []
-            )
-        }
-
-    # ========================================================
-    # 10. Find referenced tables
-    # ========================================================
-
-    referenced_tables = set()
-
-    for table in statement.find_all(
-        exp.Table
-    ):
-
-        referenced_tables.add(
-            table.name
-        )
-
-    # ========================================================
-    # 11. Check unknown tables
-    # ========================================================
-
-    unknown_tables = (
-        referenced_tables - valid_tables
-    )
-
-    if unknown_tables:
-
-        return {
-            "valid": False,
-            "reason": (
-                "Unknown table(s): "
-                + ", ".join(
-                    sorted(
-                        unknown_tables
-                    )
-                )
-            ),
-            "checks": {
-                "syntax": True,
-                "single_statement": True,
-                "select_only": True,
-                "tables": False
-            }
-        }
-
-    # ========================================================
-    # 12. Build table aliases
-    # ========================================================
-
-    aliases = {}
-
-    for table in statement.find_all(
-        exp.Table
-    ):
-
-        aliases[
-            table.alias_or_name
-        ] = table.name
-
-    # ========================================================
-    # 13. Collect SELECT aliases
-    # ========================================================
-    #
-    # Example:
-    #
-    # SUM(...) AS revenue
-    #
-    # creates:
-    #
-    # select_aliases = {"revenue"}
-    #
+    # 10. Collect SELECT aliases
     # ========================================================
 
     select_aliases = (
@@ -476,209 +853,58 @@ async def validate_sql(
     )
 
     # ========================================================
-    # 14. Validate columns
+    # 11. Validate columns
     # ========================================================
 
-    unknown_columns = []
+    column_result = validate_columns(
+        statement=statement,
+        aliases=aliases,
+        select_aliases=select_aliases,
+    )
 
-    # --------------------------------------------------------
-    # Collect every column available in referenced tables
-    # --------------------------------------------------------
-
-    referenced_columns = set()
-
-    for table_name in referenced_tables:
-
-        referenced_columns.update(
-            table_columns.get(
-                table_name,
-                set()
-            )
-        )
-
-    # --------------------------------------------------------
-    # Inspect every column
-    # --------------------------------------------------------
-
-    for column in statement.find_all(
-        exp.Column
-    ):
-
-        column_name = column.name
-
-        # ----------------------------------------------------
-        # SELECT *
-        # ----------------------------------------------------
-
-        if column_name == "*":
-
-            continue
-
-        table_reference = column.table
-
-        # ====================================================
-        # SELECT ALIAS
-        #
-        # Example:
-        #
-        # ORDER BY revenue
-        #
-        # where:
-        #
-        # SUM(...) AS revenue
-        #
-        # ====================================================
-
-        if is_select_alias_reference(
-            column,
-            select_aliases
-        ):
-
-            continue
-
-        # ====================================================
-        # Qualified column
-        #
-        # Example:
-        #
-        # p.product_name
-        # ====================================================
-
-        if table_reference:
-
-            actual_table = aliases.get(
-                table_reference
-            )
-
-            if actual_table is None:
-
-                unknown_columns.append(
-                    f"{table_reference}."
-                    f"{column_name}"
-                )
-
-                continue
-
-            valid_columns = (
-                table_columns.get(
-                    actual_table,
-                    set()
-                )
-            )
-
-            if column_name not in valid_columns:
-
-                unknown_columns.append(
-                    f"{actual_table}."
-                    f"{column_name}"
-                )
-
-        # ====================================================
-        # Unqualified column
-        #
-        # Example:
-        #
-        # product_name
-        #
-        # OR:
-        #
-        # revenue
-        # ====================================================
-
-        else:
-
-            if (
-                column_name
-                not in referenced_columns
-            ):
-
-                unknown_columns.append(
-                    column_name
-                )
-
-    # ========================================================
-    # 15. Return unknown column error
-    # ========================================================
-
-    if unknown_columns:
+    if not column_result["valid"]:
 
         return {
             "valid": False,
-            "reason": (
-                "Unknown column(s): "
-                + ", ".join(
-                    sorted(
-                        set(
-                            unknown_columns
-                        )
-                    )
-                )
+            "reason": column_result["reason"],
+            "checks": make_checks(
+                syntax=True,
+                single_statement=True,
+                select_only=True,
+                tables=True,
+                columns=False,
+                join_relationships=True,
             ),
-            "checks": {
-                "syntax": True,
-                "single_statement": True,
-                "select_only": True,
-                "tables": True,
-                "columns": False
-            }
         }
 
     # ========================================================
-    # 16. Validate JOIN relationships
+    # 12. Validate JOIN relationships
     # ========================================================
 
-    try:
-
-        valid_relationships = (
-            await get_valid_relationships()
+    join_result = (
+        validate_join_relationships(
+            statement=statement,
+            aliases=aliases,
         )
+    )
 
-        join_validation = (
-            validate_join_relationships(
-                statement,
-                valid_relationships
-            )
-        )
-
-    except Exception as exc:
+    if not join_result["valid"]:
 
         return {
             "valid": False,
-            "reason": (
-                "Could not validate JOIN "
-                f"relationships: {str(exc)}"
+            "reason": join_result["reason"],
+            "checks": make_checks(
+                syntax=True,
+                single_statement=True,
+                select_only=True,
+                tables=True,
+                columns=True,
+                join_relationships=False,
             ),
-            "checks": {
-                "syntax": True,
-                "single_statement": True,
-                "select_only": True,
-                "tables": True,
-                "columns": True,
-                "join_relationships": False
-            }
         }
 
     # ========================================================
-    # 17. Reject invalid JOIN
-    # ========================================================
-
-    if not join_validation["valid"]:
-
-        return {
-            "valid": False,
-            "reason": join_validation["reason"],
-            "checks": {
-                "syntax": True,
-                "single_statement": True,
-                "select_only": True,
-                "tables": True,
-                "columns": True,
-                "join_relationships": False
-            }
-        }
-
-    # ========================================================
-    # 18. Everything passed
+    # 13. SUCCESS
     # ========================================================
 
     return {
@@ -686,12 +912,12 @@ async def validate_sql(
         "reason": (
             "SQL passed all validation checks."
         ),
-        "checks": {
-            "syntax": True,
-            "single_statement": True,
-            "select_only": True,
-            "tables": True,
-            "columns": True,
-            "join_relationships": True
-        }
+        "checks": make_checks(
+            syntax=True,
+            single_statement=True,
+            select_only=True,
+            tables=True,
+            columns=True,
+            join_relationships=True,
+        ),
     }
