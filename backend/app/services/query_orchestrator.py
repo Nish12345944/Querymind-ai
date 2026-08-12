@@ -1126,7 +1126,7 @@ async def process_clarification(
     )
 
     return {
-        "status": "completed",
+        "status": "query_executed",
         "conversation_id": conversation_id,
         "original_question": original_question,
         "clarification": answer,
