@@ -1,6 +1,4 @@
-from typing import Any
-
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.services.query_orchestrator import (
@@ -28,6 +26,7 @@ class QueryRequest(BaseModel):
     question: str = Field(
         ...,
         min_length=1,
+        max_length=2000,
         description="Natural-language question about the database.",
     )
 
@@ -36,11 +35,13 @@ class ClarificationRequest(BaseModel):
     conversation_id: str = Field(
         ...,
         min_length=1,
+        max_length=100,
     )
 
     answer: str = Field(
         ...,
         min_length=1,
+        max_length=1000,
     )
 
 
@@ -52,8 +53,16 @@ class ClarificationRequest(BaseModel):
 async def query(
     request: QueryRequest,
 ):
+    question = request.question.strip()
+
+    if not question:
+        raise HTTPException(
+            status_code=422,
+            detail="Question cannot be empty.",
+        )
+
     return await process_query(
-        request.question
+        question
     )
 
 
@@ -65,9 +74,27 @@ async def query(
 async def clarify(
     request: ClarificationRequest,
 ):
+    conversation_id = (
+        request.conversation_id.strip()
+    )
+
+    answer = request.answer.strip()
+
+    if not conversation_id:
+        raise HTTPException(
+            status_code=422,
+            detail="Conversation ID cannot be empty.",
+        )
+
+    if not answer:
+        raise HTTPException(
+            status_code=422,
+            detail="Clarification answer cannot be empty.",
+        )
+
     return await process_clarification(
-        conversation_id=request.conversation_id,
-        answer=request.answer,
+        conversation_id=conversation_id,
+        answer=answer,
     )
 
 
@@ -77,14 +104,13 @@ async def clarify(
 
 @router.get("/history")
 async def query_history(
-    limit: int = 50,
+    limit: int = Query(
+        default=50,
+        ge=1,
+        le=100,
+        description="Number of recent records to return.",
+    ),
 ):
-    """
-    Return recent QueryMind requests.
-
-    Maximum history records returned: 100.
-    """
-
     history = await get_query_history(
         limit=limit
     )
@@ -121,10 +147,6 @@ async def query_history(
 async def query_history_detail(
     history_id: int,
 ):
-    """
-    Return one query-history record.
-    """
-
     history = await get_query_history_by_id(
         history_id
     )

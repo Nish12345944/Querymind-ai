@@ -1,26 +1,38 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from sqlalchemy import text
+
 from app.db.database import AsyncSessionLocal
 
 
 router = APIRouter(
     prefix="/database",
-    tags=["Database"]
+    tags=["Database"],
 )
 
 
 @router.get("/test")
 async def test_database_connection():
 
-    async with AsyncSessionLocal() as session:
+    try:
 
-        result = await session.execute(
-            text("SELECT current_database();")
-        )
+        async with AsyncSessionLocal() as session:
 
-        database_name = result.scalar_one()
+            result = await session.execute(
+                text("SELECT current_database();")
+            )
+
+            database_name = result.scalar_one()
 
         return {
             "status": "connected",
-            "database": database_name
+            "database": database_name,
         }
+
+    except Exception as exc:
+
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Database connection failed."
+            ),
+        ) from exc

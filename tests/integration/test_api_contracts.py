@@ -138,7 +138,8 @@ async def test_whitespace_question_rejected(client):
 
     # Current API accepts whitespace because min_length=1
     # checks string length, not stripped content.
-    assert response.status_code == 200
+    assert response.status_code == 422
+    assert response.json()["detail"]
 
 
 # ============================================================

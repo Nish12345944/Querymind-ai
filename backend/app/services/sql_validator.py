@@ -124,165 +124,53 @@ DATABASE_SCHEMA = {
 # ============================================================
 
 VALID_RELATIONSHIPS = {
-    (
-        ("orders", "customer_id"),
-        ("customers", "customer_id"),
-    ),
+    (("orders", "customer_id"), ("customers", "customer_id")),
+    (("customers", "customer_id"), ("orders", "customer_id")),
 
-    (
-        ("customers", "customer_id"),
-        ("orders", "customer_id"),
-    ),
+    (("orders", "store_id"), ("stores", "store_id")),
+    (("stores", "store_id"), ("orders", "store_id")),
 
-    (
-        ("orders", "store_id"),
-        ("stores", "store_id"),
-    ),
+    (("order_items", "order_id"), ("orders", "order_id")),
+    (("orders", "order_id"), ("order_items", "order_id")),
 
-    (
-        ("stores", "store_id"),
-        ("orders", "store_id"),
-    ),
+    (("order_items", "product_id"), ("products", "product_id")),
+    (("products", "product_id"), ("order_items", "product_id")),
 
-    (
-        ("order_items", "order_id"),
-        ("orders", "order_id"),
-    ),
+    (("products", "category_id"), ("categories", "category_id")),
+    (("categories", "category_id"), ("products", "category_id")),
 
-    (
-        ("orders", "order_id"),
-        ("order_items", "order_id"),
-    ),
+    (("products", "supplier_id"), ("suppliers", "supplier_id")),
+    (("suppliers", "supplier_id"), ("products", "supplier_id")),
 
-    (
-        ("order_items", "product_id"),
-        ("products", "product_id"),
-    ),
+    (("stores", "region_id"), ("regions", "region_id")),
+    (("regions", "region_id"), ("stores", "region_id")),
 
-    (
-        ("products", "product_id"),
-        ("order_items", "product_id"),
-    ),
+    (("inventory", "product_id"), ("products", "product_id")),
+    (("products", "product_id"), ("inventory", "product_id")),
 
-    (
-        ("products", "category_id"),
-        ("categories", "category_id"),
-    ),
+    (("inventory", "store_id"), ("stores", "store_id")),
+    (("stores", "store_id"), ("inventory", "store_id")),
 
-    (
-        ("categories", "category_id"),
-        ("products", "category_id"),
-    ),
+    (("payments", "order_id"), ("orders", "order_id")),
+    (("orders", "order_id"), ("payments", "order_id")),
 
-    (
-        ("products", "supplier_id"),
-        ("suppliers", "supplier_id"),
-    ),
+    (("returns", "order_id"), ("orders", "order_id")),
+    (("orders", "order_id"), ("returns", "order_id")),
 
-    (
-        ("suppliers", "supplier_id"),
-        ("products", "supplier_id"),
-    ),
+    (("returns", "product_id"), ("products", "product_id")),
+    (("products", "product_id"), ("returns", "product_id")),
 
-    (
-        ("stores", "region_id"),
-        ("regions", "region_id"),
-    ),
+    (("shipments", "order_id"), ("orders", "order_id")),
+    (("orders", "order_id"), ("shipments", "order_id")),
 
-    (
-        ("regions", "region_id"),
-        ("stores", "region_id"),
-    ),
+    (("customers", "region_id"), ("regions", "region_id")),
+    (("regions", "region_id"), ("customers", "region_id")),
 
-    (
-        ("inventory", "product_id"),
-        ("products", "product_id"),
-    ),
+    (("suppliers", "region_id"), ("regions", "region_id")),
+    (("regions", "region_id"), ("suppliers", "region_id")),
 
-    (
-        ("products", "product_id"),
-        ("inventory", "product_id"),
-    ),
-
-    (
-        ("inventory", "store_id"),
-        ("stores", "store_id"),
-    ),
-
-    (
-        ("stores", "store_id"),
-        ("inventory", "store_id"),
-    ),
-
-    (
-        ("payments", "order_id"),
-        ("orders", "order_id"),
-    ),
-
-    (
-        ("orders", "order_id"),
-        ("payments", "order_id"),
-    ),
-
-    (
-        ("returns", "order_id"),
-        ("orders", "order_id"),
-    ),
-
-    (
-        ("orders", "order_id"),
-        ("returns", "order_id"),
-    ),
-
-    (
-        ("returns", "product_id"),
-        ("products", "product_id"),
-    ),
-
-    (
-        ("products", "product_id"),
-        ("returns", "product_id"),
-    ),
-
-    (
-        ("shipments", "order_id"),
-        ("orders", "order_id"),
-    ),
-
-    (
-        ("orders", "order_id"),
-        ("shipments", "order_id"),
-    ),
-
-    (
-        ("customers", "region_id"),
-        ("regions", "region_id"),
-    ),
-
-    (
-        ("regions", "region_id"),
-        ("customers", "region_id"),
-    ),
-
-    (
-        ("suppliers", "region_id"),
-        ("regions", "region_id"),
-    ),
-
-    (
-        ("regions", "region_id"),
-        ("suppliers", "region_id"),
-    ),
-
-    (
-        ("employees", "store_id"),
-        ("stores", "store_id"),
-    ),
-
-    (
-        ("stores", "store_id"),
-        ("employees", "store_id"),
-    ),
+    (("employees", "store_id"), ("stores", "store_id")),
+    (("stores", "store_id"), ("employees", "store_id")),
 }
 
 
@@ -321,9 +209,7 @@ def collect_select_aliases(statement):
         alias = expression.alias
 
         if alias:
-            aliases.add(
-                alias.lower()
-            )
+            aliases.add(alias.lower())
 
     return aliases
 
@@ -336,12 +222,9 @@ def collect_table_aliases(statement):
 
     aliases = {}
 
-    for table in statement.find_all(
-        exp.Table
-    ):
+    for table in statement.find_all(exp.Table):
 
         actual_table = table.name.lower()
-
         alias = table.alias_or_name.lower()
 
         aliases[alias] = actual_table
@@ -360,9 +243,7 @@ def validate_tables(statement):
 
     referenced_tables = set()
 
-    for table in statement.find_all(
-        exp.Table
-    ):
+    for table in statement.find_all(exp.Table):
 
         referenced_tables.add(
             table.name.lower()
@@ -514,9 +395,7 @@ def validate_columns(
                 "Unknown column(s): "
                 + ", ".join(
                     sorted(
-                        set(
-                            unknown_columns
-                        )
+                        set(unknown_columns)
                     )
                 )
             ),
@@ -545,7 +424,10 @@ def validate_join_relationships(
             "on"
         )
 
-        # JOIN must have an ON condition.
+        # ----------------------------------------------------
+        # JOIN must have ON condition
+        # ----------------------------------------------------
+
         if on_expression is None:
 
             return {
@@ -636,6 +518,82 @@ def validate_join_relationships(
 
 
 # ============================================================
+# SECURITY VALIDATION
+# ============================================================
+
+def validate_security(statement):
+
+    # --------------------------------------------------------
+    # SELECT INTO
+    # --------------------------------------------------------
+
+    if statement.args.get("into") is not None:
+
+        return {
+            "valid": False,
+            "reason": (
+                "SELECT INTO statements are not allowed."
+            ),
+        }
+
+    # --------------------------------------------------------
+    # Row locking
+    #
+    # Examples:
+    #
+    # SELECT ... FOR UPDATE
+    # SELECT ... FOR SHARE
+    # --------------------------------------------------------
+
+    if statement.args.get("locks"):
+
+        return {
+            "valid": False,
+            "reason": (
+                "Row-locking SELECT statements "
+                "are not allowed."
+            ),
+        }
+
+    # --------------------------------------------------------
+    # Dangerous AST operations
+    # --------------------------------------------------------
+
+    forbidden_node_types = {
+        "Insert",
+        "Update",
+        "Delete",
+        "Drop",
+        "Alter",
+        "Create",
+        "Merge",
+        "Grant",
+        "Revoke",
+        "Truncate",
+        "TruncateTable",
+    }
+
+    for node in statement.walk():
+
+        node_type = type(node).__name__
+
+        if node_type in forbidden_node_types:
+
+            return {
+                "valid": False,
+                "reason": (
+                    "Forbidden SQL operation: "
+                    f"{node_type}"
+                ),
+            }
+
+    return {
+        "valid": True,
+        "reason": "SQL passed security checks.",
+    }
+
+
+# ============================================================
 # MAIN SQL VALIDATOR
 # ============================================================
 
@@ -650,9 +608,7 @@ async def validate_sql(
     if sql is None:
         sql = ""
 
-    sql = str(
-        sql
-    ).strip()
+    sql = str(sql).strip()
 
     # ========================================================
     # 2. Empty SQL
@@ -766,50 +722,27 @@ async def validate_sql(
         }
 
     # ========================================================
-    # 7. Reject dangerous operations
-    # ========================================================
-    #
-    # We use node type names rather than version-specific
-    # SQLGlot classes.
+    # 7. Security validation
     # ========================================================
 
-    forbidden_node_types = {
-        "Insert",
-        "Update",
-        "Delete",
-        "Drop",
-        "Alter",
-        "Create",
-        "Merge",
-        "Grant",
-        "Revoke",
-        "Truncate",
-        "TruncateTable",
-    }
+    security_result = validate_security(
+        statement
+    )
 
-    for node in statement.walk():
+    if not security_result["valid"]:
 
-        node_type = type(
-            node
-        ).__name__
-
-        if node_type in forbidden_node_types:
-
-            return {
-                "valid": False,
-                "reason": (
-                    "Forbidden SQL operation: "
-                    f"{node_type}"
-                ),
-                "checks": make_checks(
-                    syntax=True,
-                    single_statement=True,
-                    select_only=False,
-                    tables=True,
-                    columns=True,
-                    join_relationships=True,
-                ),
-            }
+        return {
+            "valid": False,
+            "reason": security_result["reason"],
+            "checks": make_checks(
+                syntax=True,
+                single_statement=True,
+                select_only=False,
+                tables=True,
+                columns=True,
+                join_relationships=True,
+            ),
+        }
 
     # ========================================================
     # 8. Validate tables
@@ -835,7 +768,7 @@ async def validate_sql(
         }
 
     # ========================================================
-    # 9. Collect aliases
+    # 9. Collect table aliases
     # ========================================================
 
     aliases = collect_table_aliases(

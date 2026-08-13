@@ -7,6 +7,24 @@ from app.db.models import QueryHistory
 
 
 # ============================================================
+# UTC NAIVE TIMESTAMP
+# ============================================================
+# PostgreSQL currently uses:
+#
+# TIMESTAMP WITHOUT TIME ZONE
+#
+# Therefore we store UTC as a naive datetime.
+# ============================================================
+
+def utc_now_naive() -> datetime:
+    return datetime.now(
+        timezone.utc
+    ).replace(
+        tzinfo=None
+    )
+
+
+# ============================================================
 # SAVE QUERY HISTORY
 # ============================================================
 
@@ -23,25 +41,33 @@ async def save_query_history(
 ):
     async with AsyncSessionLocal() as session:
 
-        history = QueryHistory(
-            request_id=request_id,
-            question=question,
-            sql=sql,
-            status=status,
-            row_count=row_count,
-            answer=answer,
-            error=error,
-            duration_ms=duration_ms,
-            created_at=datetime.now(timezone.utc),
-        )
+        try:
 
-        session.add(history)
+            history = QueryHistory(
+                request_id=request_id,
+                question=question,
+                sql=sql,
+                status=status,
+                row_count=row_count,
+                answer=answer,
+                error=error,
+                duration_ms=duration_ms,
+                created_at=utc_now_naive(),
+            )
 
-        await session.commit()
+            session.add(history)
 
-        await session.refresh(history)
+            await session.commit()
 
-        return history
+            await session.refresh(history)
+
+            return history
+
+        except Exception:
+
+            await session.rollback()
+
+            raise
 
 
 # ============================================================
@@ -51,13 +77,20 @@ async def save_query_history(
 async def get_query_history(
     limit: int = 50,
 ):
-    limit = max(1, min(limit, 100))
+    limit = max(
+        1,
+        min(limit, 100)
+    )
 
     async with AsyncSessionLocal() as session:
 
         result = await session.execute(
             select(QueryHistory)
-            .order_by(desc(QueryHistory.created_at))
+            .order_by(
+                desc(
+                    QueryHistory.created_at
+                )
+            )
             .limit(limit)
         )
 
@@ -65,7 +98,7 @@ async def get_query_history(
 
 
 # ============================================================
-# GET QUERY HISTORY BY ID
+# GET SINGLE HISTORY RECORD
 # ============================================================
 
 async def get_query_history_by_id(

@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.services.clarification_service import (
     analyze_question
@@ -14,19 +14,21 @@ router = APIRouter(
 
 class ClarificationRequest(BaseModel):
 
-    question: str
+    question: str = Field(
+        ...,
+        min_length=1,
+        max_length=2000,
+    )
 
 
 @router.post("/analyze")
 async def analyze_clarification(
-    request: ClarificationRequest
+    request: ClarificationRequest,
 ):
 
-    result = await analyze_question(
-        request.question
-    )
+    question = request.question.strip()
 
     return {
-        "question": request.question,
-        **result
+        "question": question,
+        **await analyze_question(question),
     }
