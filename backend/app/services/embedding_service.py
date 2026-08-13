@@ -1,16 +1,45 @@
-from sentence_transformers import SentenceTransformer
+from fastembed import TextEmbedding
 
+
+# ============================================================
+# Lightweight embedding model
+# ============================================================
 
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
+_model = None
 
-model = SentenceTransformer(MODEL_NAME)
+
+# ============================================================
+# Lazy model loading
+# ============================================================
+
+def _get_model() -> TextEmbedding:
+    global _model
+
+    if _model is None:
+        _model = TextEmbedding(
+            model_name=MODEL_NAME
+        )
+
+    return _model
 
 
-def generate_embeddings(texts: list[str]):
-    embeddings = model.encode(
-        texts,
-        normalize_embeddings=True
-    )
+# ============================================================
+# Generate embeddings
+# ============================================================
 
-    return embeddings.tolist()
+def generate_embeddings(
+    texts: list[str],
+) -> list[list[float]]:
+    if not texts:
+        return []
+
+    model = _get_model()
+
+    embeddings = model.embed(texts)
+
+    return [
+        embedding.tolist()
+        for embedding in embeddings
+    ]
