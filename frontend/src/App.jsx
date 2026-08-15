@@ -775,6 +775,10 @@ function App() {
 
               </span>
 
+              <p className="demo-notice">
+                Demo may take a moment to start after inactivity.
+              </p>
+
             </section>
 
 
