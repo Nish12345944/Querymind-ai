@@ -3,7 +3,29 @@ from sqlalchemy import text
 from app.db.database import AsyncSessionLocal
 
 
-async def get_database_schema():
+_schema_cache: dict | None = None
+
+
+async def get_database_schema(use_cache: bool = True):
+    global _schema_cache
+
+    if use_cache and _schema_cache is not None:
+        return _schema_cache
+
+    schema = await _fetch_schema()
+
+    if use_cache:
+        _schema_cache = schema
+
+    return schema
+
+
+def invalidate_schema_cache():
+    global _schema_cache
+    _schema_cache = None
+
+
+async def _fetch_schema():
     async with AsyncSessionLocal() as session:
 
         # ---------------------------------------------------------

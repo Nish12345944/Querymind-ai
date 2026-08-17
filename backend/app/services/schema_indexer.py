@@ -10,8 +10,14 @@ from app.services.vector_store import (
     add_schema_documents
 )
 
+from app.services.schema_service import (
+    invalidate_schema_cache
+)
+
 
 async def index_database_schema():
+
+    invalidate_schema_cache()
 
     documents = await build_schema_documents()
 

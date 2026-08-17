@@ -1,7 +1,9 @@
 from contextlib import asynccontextmanager
+import uuid
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.api.database import router as database_router
@@ -31,6 +33,7 @@ from app.db.database import (
     AsyncSessionLocal,
 )
 
+from app.core.config import settings
 from app.core.logging import configure_logging
 
 configure_logging()
@@ -72,7 +75,7 @@ app = FastAPI(
 ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-    "https://querymind-frontend-cyrb.onrender.com",
+    *([settings.frontend_url] if settings.frontend_url else []),
 ]
 
 
@@ -83,6 +86,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ============================================================
+# REQUEST ID MIDDLEWARE
+# ============================================================
+
+@app.middleware("http")
+async def add_request_id(request: Request, call_next):
+    request_id = request.headers.get(
+        "X-Request-ID",
+        str(uuid.uuid4()),
+    )
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
 
 
 # ============================================================
@@ -162,3 +180,38 @@ async def health():
             "status": "degraded",
             "database": "unavailable",
         }
+
+
+# ============================================================
+# READINESS ENDPOINT
+# ============================================================
+
+@app.get("/ready")
+async def ready():
+    """
+    Readiness probe — returns 200 only when the database
+    is reachable and the app is ready to serve traffic.
+    Returns 503 otherwise so load balancers / orchestrators
+    can withhold traffic until the service is truly ready.
+    """
+
+    from fastapi import Response
+
+    try:
+
+        async with AsyncSessionLocal() as session:
+
+            await session.execute(text("SELECT 1"))
+
+        return {
+            "status": "ready",
+            "database": "connected",
+        }
+
+    except Exception:
+
+        return Response(
+            content='{"status":"not_ready","database":"unavailable"}',
+            status_code=503,
+            media_type="application/json",
+        )
