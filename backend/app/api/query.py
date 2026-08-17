@@ -1,20 +1,27 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.services.query_orchestrator import (
-    process_query,
-    process_clarification,
-)
-
+from app.core.security import require_api_key
 from app.services.query_history_service import (
     get_query_history,
     get_query_history_by_id,
 )
+from app.services.query_orchestrator import (
+    process_clarification,
+    process_query,
+)
 
+
+# ============================================================
+# ROUTER
+# ============================================================
 
 router = APIRouter(
     prefix="/query",
     tags=["Query"],
+    dependencies=[
+        Depends(require_api_key)
+    ],
 )
 
 
@@ -53,6 +60,13 @@ class ClarificationRequest(BaseModel):
 async def query(
     request: QueryRequest,
 ):
+    """
+    Process a natural-language database question.
+
+    The original question is preserved exactly apart from
+    leading/trailing whitespace.
+    """
+
     question = request.question.strip()
 
     if not question:
@@ -62,7 +76,7 @@ async def query(
         )
 
     return await process_query(
-        question
+        question=question,
     )
 
 
@@ -74,10 +88,11 @@ async def query(
 async def clarify(
     request: ClarificationRequest,
 ):
-    conversation_id = (
-        request.conversation_id.strip()
-    )
+    """
+    Process a user's clarification response.
+    """
 
+    conversation_id = request.conversation_id.strip()
     answer = request.answer.strip()
 
     if not conversation_id:
@@ -111,8 +126,12 @@ async def query_history(
         description="Number of recent records to return.",
     ),
 ):
+    """
+    Return recent query history.
+    """
+
     history = await get_query_history(
-        limit=limit
+        limit=limit,
     )
 
     return {
@@ -147,8 +166,12 @@ async def query_history(
 async def query_history_detail(
     history_id: int,
 ):
+    """
+    Return one query history record.
+    """
+
     history = await get_query_history_by_id(
-        history_id
+        history_id,
     )
 
     if history is None:

@@ -395,7 +395,6 @@ for item in questions:
 
         if actual_status in (
             "sql_rejected",
-            "execution_failed",
             "unsupported"
         ):
 
@@ -405,6 +404,10 @@ for item in questions:
 
             print(
                 "  Unsupported: PASS"
+            )
+
+            print(
+                f" Actual status: {actual_status}"
             )
 
         else:

@@ -4,10 +4,11 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
 from main import app
+from app.core.config import settings
 
 
 # ============================================================
-# Test client fixture
+# Test client fixtures
 # ============================================================
 
 @pytest_asyncio.fixture
@@ -21,14 +22,30 @@ async def client():
         yield client
 
 
+@pytest_asyncio.fixture
+async def authenticated_client():
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={
+            "X-API-Key": settings.api_key
+        }
+    ) as client:
+        yield client
+
+
 # ============================================================
 # Successful query response
 # ============================================================
 
 @pytest.mark.asyncio
-async def test_query_response_contract(client):
+async def test_query_response_contract(
+    authenticated_client
+):
 
-    response = await client.post(
+    response = await authenticated_client.post(
         "/query/",
         json={
             "question": "How many customers are there?"
@@ -57,9 +74,11 @@ async def test_query_response_contract(client):
 # ============================================================
 
 @pytest.mark.asyncio
-async def test_clarification_response_contract(client):
+async def test_clarification_response_contract(
+    authenticated_client
+):
 
-    response = await client.post(
+    response = await authenticated_client.post(
         "/query/",
         json={
             "question": "Show me sales."
@@ -86,9 +105,11 @@ async def test_clarification_response_contract(client):
 # ============================================================
 
 @pytest.mark.asyncio
-async def test_unsupported_response_contract(client):
+async def test_unsupported_response_contract(
+    authenticated_client
+):
 
-    response = await client.post(
+    response = await authenticated_client.post(
         "/query/",
         json={
             "question": "What is the employee happiness score?"
@@ -110,9 +131,11 @@ async def test_unsupported_response_contract(client):
 # ============================================================
 
 @pytest.mark.asyncio
-async def test_empty_question_rejected(client):
+async def test_empty_question_rejected(
+    authenticated_client
+):
 
-    response = await client.post(
+    response = await authenticated_client.post(
         "/query/",
         json={
             "question": ""
@@ -127,17 +150,17 @@ async def test_empty_question_rejected(client):
 # ============================================================
 
 @pytest.mark.asyncio
-async def test_whitespace_question_rejected(client):
+async def test_whitespace_question_rejected(
+    authenticated_client
+):
 
-    response = await client.post(
+    response = await authenticated_client.post(
         "/query/",
         json={
             "question": "   "
         }
     )
 
-    # Current API accepts whitespace because min_length=1
-    # checks string length, not stripped content.
     assert response.status_code == 422
     assert response.json()["detail"]
 
@@ -147,9 +170,11 @@ async def test_whitespace_question_rejected(client):
 # ============================================================
 
 @pytest.mark.asyncio
-async def test_missing_question_rejected(client):
+async def test_missing_question_rejected(
+    authenticated_client
+):
 
-    response = await client.post(
+    response = await authenticated_client.post(
         "/query/",
         json={}
     )
@@ -162,9 +187,11 @@ async def test_missing_question_rejected(client):
 # ============================================================
 
 @pytest.mark.asyncio
-async def test_missing_clarification_fields(client):
+async def test_missing_clarification_fields(
+    authenticated_client
+):
 
-    response = await client.post(
+    response = await authenticated_client.post(
         "/query/clarify",
         json={}
     )

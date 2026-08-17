@@ -318,3 +318,70 @@ async def test_product_revenue_query():
     )
 
     assert result["valid"] is True
+
+
+# ============================================================
+# ADDITIONAL SECURITY / JOIN VALIDATION
+# ============================================================
+
+@pytest.mark.asyncio
+async def test_reject_select_into():
+    result = await validate_sql(
+        """
+        SELECT customer_id
+        INTO customer_backup
+        FROM customers
+        """
+    )
+
+    assert result["valid"] is False
+    assert "SELECT INTO" in result["reason"]
+
+
+@pytest.mark.asyncio
+async def test_reject_row_locking():
+    result = await validate_sql(
+        """
+        SELECT customer_id
+        FROM customers
+        FOR UPDATE
+        """
+    )
+
+    assert result["valid"] is False
+    assert "locking" in result["reason"].lower()
+
+
+@pytest.mark.asyncio
+async def test_reject_join_without_on_condition():
+    result = await validate_sql(
+        """
+        SELECT
+            c.first_name,
+            o.order_id
+        FROM customers c
+        JOIN orders o
+        """
+    )
+
+    assert result["valid"] is False
+    assert result["checks"]["join_relationships"] is False
+
+# ============================================================
+# AMBIGUOUS COLUMN VALIDATION
+# ============================================================
+
+@pytest.mark.asyncio
+async def test_reject_ambiguous_unqualified_column():
+    result = await validate_sql(
+        """
+        SELECT customer_id
+        FROM customers c
+        JOIN orders o
+            ON c.customer_id = o.customer_id
+        """
+    )
+
+    assert result["valid"] is False
+    assert result["checks"]["columns"] is False
+

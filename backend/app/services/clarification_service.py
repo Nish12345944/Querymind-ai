@@ -1,9 +1,10 @@
 import json
 import re
+import uuid
+from typing import Any
 
-from app.services.schema_service import (
-    get_database_schema
-)
+from app.services.groq_service import generate_completion
+from app.services.schema_service import get_database_schema
 
 
 # ============================================================
@@ -12,718 +13,132 @@ from app.services.schema_service import (
 
 def normalize_question(question: str) -> str:
     """
-    Normalize user input for deterministic checks.
+    Normalize whitespace and casing while preserving word
+    boundaries.
     """
-    question = question.lower()
 
-    question = re.sub(
+    if not isinstance(question, str):
+        return ""
+
+    question = question.replace("\u00a0", " ")
+
+    return re.sub(
         r"\s+",
         " ",
-        question
+        question.strip().lower(),
     )
-
-    return question.strip()
 
 
 # ============================================================
 # SCHEMA HELPERS
 # ============================================================
 
-def get_columns(
-    schema: dict,
-    table_name: str
-) -> set:
-    """
-    Return the column names for a table.
-    """
-
-    if table_name not in schema:
-        return set()
-
-    return {
-        column["name"]
-        for column in schema[table_name].get(
-            "columns",
-            []
-        )
-    }
-
-
 def has_table(
-    schema: dict,
-    table_name: str
+    schema: dict[str, Any],
+    table_name: str,
 ) -> bool:
-    """
-    Check whether a table exists.
-    """
-
     return table_name in schema
 
 
-def has_columns(
-    schema: dict,
+def has_column(
+    schema: dict[str, Any],
     table_name: str,
-    required_columns: set
+    column_name: str,
 ) -> bool:
-    """
-    Check whether a table contains all required columns.
-    """
 
-    return required_columns.issubset(
-        get_columns(
-            schema,
-            table_name
-        )
+    table = schema.get(table_name)
+
+    if not isinstance(table, dict):
+        return False
+
+    columns = table.get("columns", [])
+
+    return any(
+        isinstance(column, dict)
+        and column.get("name") == column_name
+        for column in columns
     )
 
 
 # ============================================================
-# DETERMINISTIC SUPPORTED CHECK
-# ============================================================
-
-def is_definitely_supported(
-    question: str,
-    schema: dict
-) -> bool:
-    """
-    Detect questions that are definitely answerable from
-    the current database schema.
-
-    These checks happen BEFORE Groq.
-    """
-
-    q = normalize_question(question)
-
-    # ========================================================
-    # IMPORTANT:
-    # "best products" without a metric is ambiguous.
-    # ========================================================
-
-    if (
-        "best product" in q
-        or "best products" in q
-    ):
-        if not any(
-            metric in q
-            for metric in [
-                "revenue",
-                "sales",
-                "quantity",
-                "units",
-                "profit",
-                "price",
-                "rating"
-            ]
-        ):
-            return False
-
-    # ========================================================
-    # TOP PRODUCTS BY REVENUE
-    # ========================================================
-
-    if (
-        "product" in q
-        and "revenue" in q
-        and any(
-            word in q
-            for word in [
-                "top",
-                "best",
-                "highest",
-                "most"
-            ]
-        )
-    ):
-        if (
-            has_columns(
-                schema,
-                "products",
-                {
-                    "product_id",
-                    "product_name"
-                }
-            )
-            and
-            has_columns(
-                schema,
-                "order_items",
-                {
-                    "product_id",
-                    "quantity",
-                    "unit_price"
-                }
-            )
-            and
-            has_columns(
-                schema,
-                "orders",
-                {
-                    "order_id"
-                }
-            )
-        ):
-            return True
-
-    # ========================================================
-    # COUNT CUSTOMERS
-    # ========================================================
-
-    if (
-        "customer" in q
-        and any(
-            phrase in q
-            for phrase in [
-                "how many",
-                "number of",
-                "count"
-            ]
-        )
-    ):
-        if has_table(
-            schema,
-            "customers"
-        ):
-            return True
-
-    # ========================================================
-    # COUNT ORDERS
-    # ========================================================
-
-    if (
-        "order" in q
-        and any(
-            phrase in q
-            for phrase in [
-                "how many",
-                "number of",
-                "count"
-            ]
-        )
-    ):
-        if has_table(
-            schema,
-            "orders"
-        ):
-            return True
-
-    # ========================================================
-    # TOTAL REVENUE
-    # ========================================================
-
-    if (
-        "revenue" in q
-        and "total" in q
-    ):
-        if has_columns(
-            schema,
-            "orders",
-            {
-                "total_amount"
-            }
-        ):
-            return True
-
-        if has_columns(
-            schema,
-            "order_items",
-            {
-                "quantity",
-                "unit_price"
-            }
-        ):
-            return True
-
-    # ========================================================
-    # AVERAGE PRODUCT PRICE
-    # ========================================================
-
-    if (
-        "product" in q
-        and "price" in q
-        and (
-            "average" in q
-            or "avg" in q
-        )
-    ):
-        if has_columns(
-            schema,
-            "products",
-            {
-                "unit_price"
-            }
-        ):
-            return True
-
-    # ========================================================
-    # PRODUCTS IN CATEGORIES
-    # ========================================================
-
-    if (
-        "product" in q
-        and "categor" in q
-    ):
-        if (
-            has_columns(
-                schema,
-                "products",
-                {
-                    "product_id",
-                    "product_name",
-                    "category_id"
-                }
-            )
-            and
-            has_columns(
-                schema,
-                "categories",
-                {
-                    "category_id",
-                    "category_name"
-                }
-            )
-        ):
-            return True
-
-    # ========================================================
-    # ORDERS WITH CUSTOMER NAMES
-    # ========================================================
-
-    if (
-        "order" in q
-        and (
-            "customer name" in q
-            or "customer names" in q
-            or (
-                "customer" in q
-                and "name" in q
-            )
-        )
-    ):
-        if (
-            has_columns(
-                schema,
-                "orders",
-                {
-                    "order_id",
-                    "customer_id"
-                }
-            )
-            and
-            has_columns(
-                schema,
-                "customers",
-                {
-                    "customer_id",
-                    "first_name",
-                    "last_name"
-                }
-            )
-        ):
-            return True
-
-    # ========================================================
-    # STORES IN REGIONS
-    # ========================================================
-
-    if (
-        "store" in q
-        and "region" in q
-    ):
-        if (
-            has_columns(
-                schema,
-                "stores",
-                {
-                    "store_id",
-                    "store_name",
-                    "region_id"
-                }
-            )
-            and
-            has_columns(
-                schema,
-                "regions",
-                {
-                    "region_id",
-                    "region_name"
-                }
-            )
-        ):
-            return True
-
-    # ========================================================
-    # ORDERS IN SPECIFIC YEAR
-    # ========================================================
-
-    if (
-        "order" in q
-        and any(
-            phrase in q
-            for phrase in [
-                "how many",
-                "number of",
-                "count"
-            ]
-        )
-        and re.search(
-            r"\b20\d{2}\b",
-            q
-        )
-    ):
-        if has_columns(
-            schema,
-            "orders",
-            {
-                "order_id",
-                "order_date"
-            }
-        ):
-            return True
-
-    # ========================================================
-    # REVENUE IN SPECIFIC YEAR
-    # ========================================================
-
-    if (
-        "revenue" in q
-        and re.search(
-            r"\b20\d{2}\b",
-            q
-        )
-    ):
-        if has_columns(
-            schema,
-            "orders",
-            {
-                "total_amount",
-                "order_date"
-            }
-        ):
-            return True
-
-    # ========================================================
-    # SHOW ALL PRODUCTS
-    # ========================================================
-
-    if (
-        "product" in q
-        and any(
-            phrase in q
-            for phrase in [
-                "show me all",
-                "show all",
-                "list all",
-                "list the",
-                "show the products",
-                "show products",
-                "all products"
-            ]
-        )
-    ):
-        if has_table(
-            schema,
-            "products"
-        ):
-            return True
-
-    # ========================================================
-    # GENERIC PRODUCT LISTING
-    # ========================================================
-
-    if (
-        "product" in q
-        and has_table(
-            schema,
-            "products"
-        )
-        and any(
-            phrase in q
-            for phrase in [
-                "show",
-                "list",
-                "display"
-            ]
-        )
-    ):
-        return True
-
-    return False
-
-
-# ============================================================
-# DETERMINISTIC UNSUPPORTED CHECK
-# ============================================================
-
-def is_definitely_unsupported(
-    question: str,
-    schema: dict
-) -> bool:
-    """
-    Detect questions that clearly request information
-    that does not exist in the database.
-    """
-
-    q = normalize_question(question)
-
-    # ========================================================
-    # EMPLOYEE HAPPINESS
-    # ========================================================
-
-    if (
-        "employee happiness" in q
-        or "employee satisfaction" in q
-    ):
-        employee_columns = get_columns(
-            schema,
-            "employees"
-        )
-
-        if not any(
-            column in employee_columns
-            for column in [
-                "happiness_score",
-                "satisfaction_score",
-                "happiness",
-                "satisfaction"
-            ]
-        ):
-            return True
-
-    # ========================================================
-    # CUSTOMER SATISFACTION
-    # ========================================================
-
-    if (
-        "customer satisfaction" in q
-        or "customer happiness" in q
-    ):
-        customer_columns = get_columns(
-            schema,
-            "customers"
-        )
-
-        if not any(
-            column in customer_columns
-            for column in [
-                "satisfaction_score",
-                "happiness_score",
-                "satisfaction",
-                "happiness"
-            ]
-        ):
-            return True
-
-    # ========================================================
-    # EMPLOYEE PERFORMANCE
-    # ========================================================
-
-    if (
-        "employee performance" in q
-        or "employee performance rating" in q
-        or "employee performance ratings" in q
-    ):
-        employee_columns = get_columns(
-            schema,
-            "employees"
-        )
-
-        if not any(
-            column in employee_columns
-            for column in [
-                "performance_rating",
-                "performance_score",
-                "rating",
-                "score"
-            ]
-        ):
-            return True
-
-    # ========================================================
-    # EMPLOYEE REVIEWS TABLE
-    # ========================================================
-
-    if "employee_reviews" in q:
-        if not has_table(
-            schema,
-            "employee_reviews"
-        ):
-            return True
-
-    return False
-
-
-# ============================================================
-# DETERMINISTIC AMBIGUOUS OPTIONS
-# ============================================================
-
-def get_deterministic_clarification(
-    question: str
-) -> dict | None:
-    """
-    Return deterministic clarification responses for common
-    ambiguous business terms.
-
-    This avoids relying on the LLM to invent UI options.
-    """
-
-    q = normalize_question(question)
-
-    # ========================================================
-    # SALES
-    # ========================================================
-
-    if (
-        q == "show me sales."
-        or q == "show me sales"
-        or q == "sales"
-        or q == "show sales"
-        or "what are sales" in q
-    ):
-        return {
-            "intent": "AMBIGUOUS",
-            "needs_clarification": True,
-            "is_unsupported": False,
-            "reason": (
-                "The term 'sales' is ambiguous and could "
-                "refer to revenue, orders, or product sales."
-            ),
-            "question": (
-                "What do you mean by 'sales'?"
-            ),
-            "options": [
-                {
-                    "label": "Revenue",
-                    "description": (
-                        "Total monetary revenue from orders."
-                    )
-                },
-                {
-                    "label": "Orders",
-                    "description": (
-                        "Number of orders placed."
-                    )
-                },
-                {
-                    "label": "Product sales",
-                    "description": (
-                        "Products sold and their quantities."
-                    )
-                }
-            ]
-        }
-
-    # ========================================================
-    # BEST PRODUCTS
-    # ========================================================
-
-    if (
-        "best product" in q
-        or "best products" in q
-    ):
-        return {
-            "intent": "AMBIGUOUS",
-            "needs_clarification": True,
-            "is_unsupported": False,
-            "reason": (
-                "The term 'best products' is ambiguous "
-                "because products can be ranked by different metrics."
-            ),
-            "question": (
-                "How would you like to rank the products?"
-            ),
-            "options": [
-                {
-                    "label": "Revenue",
-                    "description": (
-                        "Rank products by total revenue."
-                    )
-                },
-                {
-                    "label": "Quantity sold",
-                    "description": (
-                        "Rank products by units sold."
-                    )
-                },
-                {
-                    "label": "Price",
-                    "description": (
-                        "Rank products by selling price."
-                    )
-                }
-            ]
-        }
-
-    # ========================================================
-    # BEST STORE
-    # ========================================================
-
-    if (
-        "best store" in q
-        or "best stores" in q
-        or "store is performing best" in q
-        or "stores are performing best" in q
-    ):
-        return {
-            "intent": "AMBIGUOUS",
-            "needs_clarification": True,
-            "is_unsupported": False,
-            "reason": (
-                "Store performance can be measured using "
-                "different metrics."
-            ),
-            "question": (
-                "How would you like to measure store performance?"
-            ),
-            "options": [
-                {
-                    "label": "Revenue",
-                    "description": (
-                        "Rank stores by total revenue."
-                    )
-                },
-                {
-                    "label": "Number of orders",
-                    "description": (
-                        "Rank stores by order count."
-                    )
-                }
-            ]
-        }
-
-    return None
-
-
-# ============================================================
-# FORMAT DATABASE SCHEMA
+# SCHEMA FORMATTER
 # ============================================================
 
 def format_schema_for_llm(
-    schema: dict
+    schema: dict[str, Any],
 ) -> str:
     """
-    Convert database schema into compact text for Groq.
+    Convert the database schema into a compact text format
+    suitable for the intent classifier.
     """
 
-    lines = []
+    if not schema:
+        return "No database schema is available."
 
-    for table_name in sorted(
-        schema.keys()
-    ):
+    lines: list[str] = []
+
+    for table_name, table_info in schema.items():
+
         lines.append(
             f"TABLE: {table_name}"
         )
 
-        columns = schema[
-            table_name
-        ].get(
+        if not isinstance(table_info, dict):
+            continue
+
+        columns = table_info.get(
             "columns",
-            []
+            [],
         )
 
         for column in columns:
+
+            if not isinstance(column, dict):
+                continue
+
+            column_name = column.get(
+                "name",
+                "",
+            )
+
+            column_type = column.get(
+                "type",
+                "",
+            )
+
             lines.append(
-                f"  - {column['name']} "
-                f"({column['type']})"
+                f"  - {column_name} ({column_type})"
+            )
+
+        primary_keys = table_info.get(
+            "primary_keys",
+            [],
+        )
+
+        if primary_keys:
+            lines.append(
+                "  PRIMARY KEY: "
+                + ", ".join(primary_keys)
+            )
+
+        foreign_keys = table_info.get(
+            "foreign_keys",
+            [],
+        )
+
+        for foreign_key in foreign_keys:
+
+            if not isinstance(
+                foreign_key,
+                dict,
+            ):
+                continue
+
+            lines.append(
+                "  FOREIGN KEY: "
+                f"{foreign_key.get('column')} -> "
+                f"{foreign_key.get('references_table')}."
+                f"{foreign_key.get('references_column')}"
             )
 
         lines.append("")
@@ -732,220 +147,381 @@ def format_schema_for_llm(
 
 
 # ============================================================
-# MAIN INTENT ANALYZER
+# DETERMINISTIC CLARIFICATION
 # ============================================================
 
-async def analyze_question(
-    question: str
-):
+def get_deterministic_clarification(
+    question: str,
+) -> dict[str, Any] | None:
     """
-    Analyze a user question.
-
-    Deterministic supported, unsupported, and common
-    clarification checks happen before Groq.
+    Handle questions whose intent is clearly database-related
+    but whose requested business metric is ambiguous.
     """
 
-    # ========================================================
-    # 1. Load schema
-    # ========================================================
+    q = normalize_question(question)
 
-    try:
-        schema = await get_database_schema()
+    # --------------------------------------------------------
+    # Generic sales question
+    # --------------------------------------------------------
 
-    except Exception as exc:
+    if re.search(
+        r"\bsales?\b",
+        q,
+    ):
+
+        # If the user specifies a concrete sales metric,
+        # don't ask for clarification.
+        if any(
+            phrase in q
+            for phrase in [
+                "revenue",
+                "orders",
+                "order count",
+                "units sold",
+                "product sales",
+            ]
+        ):
+            return None
 
         return {
             "intent": "AMBIGUOUS",
             "needs_clarification": True,
             "is_unsupported": False,
             "reason": (
-                "Unable to inspect the database schema: "
-                f"{str(exc)}"
+                "The term 'sales' could refer to revenue, "
+                "orders, or product-level sales."
             ),
             "question": (
-                "Could you clarify what you want to know?"
+                "What would you like to see for sales?"
             ),
-            "options": []
+            "options": [
+                "Revenue",
+                "Orders",
+                "Product sales",
+            ],
         }
 
-    # ========================================================
-    # 2. Known ambiguous questions
-    # ========================================================
+    # --------------------------------------------------------
+    # Generic performance question
+    # --------------------------------------------------------
 
-    deterministic_clarification = (
-        get_deterministic_clarification(
-            question
+    if any(
+        phrase in q
+        for phrase in [
+            "best performing",
+            "top performing",
+            "poor performing",
+            "performance",
+        ]
+    ):
+
+        if not any(
+            keyword in q
+            for keyword in [
+                "product",
+                "store",
+                "region",
+                "customer",
+            ]
+        ):
+
+            return {
+                "intent": "AMBIGUOUS",
+                "needs_clarification": True,
+                "is_unsupported": False,
+                "reason": (
+                    "The subject of performance is unclear."
+                ),
+                "question": (
+                    "What would you like to compare?"
+                ),
+                "options": [
+                    "Products",
+                    "Stores",
+                    "Regions",
+                    "Customers",
+                ],
+            }
+
+    return None
+
+
+# ============================================================
+# DEFINITELY SUPPORTED
+# ============================================================
+
+def is_definitely_supported(
+    question: str,
+    schema: dict[str, Any],
+) -> bool:
+
+    q = normalize_question(question)
+
+    # --------------------------------------------------------
+    # Customer count
+    # --------------------------------------------------------
+
+    if (
+        re.search(
+            r"how\s*many\s*customers?",
+            q,
         )
-    )
-
-    if deterministic_clarification:
-        return deterministic_clarification
-
-    # ========================================================
-    # 3. Definitely supported
-    # ========================================================
-
-    if is_definitely_supported(
-        question,
-        schema
+        or re.search(
+            r"(number|count|total\s+number)\s*(of)?\s*customers?",
+            q,
+        )
     ):
-        return {
-            "intent": "CLEAR",
-            "needs_clarification": False,
-            "is_unsupported": False,
-            "reason": None,
-            "question": None,
-            "options": []
-        }
+        return has_table(
+            schema,
+            "customers",
+        )
 
-    # ========================================================
-    # 4. Definitely unsupported
-    # ========================================================
+    # --------------------------------------------------------
+    # Order count
+    # --------------------------------------------------------
 
-    if is_definitely_unsupported(
-        question,
-        schema
+    if (
+        re.search(
+            r"how\s*many\s*orders?",
+            q,
+        )
+        or re.search(
+            r"(number|count|total\s+number)\s*(of)?\s*orders?",
+            q,
+        )
     ):
-        return {
-            "intent": "UNSUPPORTED",
-            "needs_clarification": False,
-            "is_unsupported": True,
-            "reason": (
-                "The requested information is not available "
-                "in the database schema."
-            ),
-            "question": None,
-            "options": []
-        }
+        return has_table(
+            schema,
+            "orders",
+        )
 
-    # ========================================================
-    # 5. Groq fallback
-    # ========================================================
+    # --------------------------------------------------------
+    # Total revenue
+    # --------------------------------------------------------
+
+    if (
+        "revenue" in q
+        and any(
+            phrase in q
+            for phrase in [
+                "total",
+                "sum",
+                "how much",
+            ]
+        )
+    ):
+        return (
+            has_table(
+                schema,
+                "orders",
+            )
+            and has_column(
+                schema,
+                "orders",
+                "total_amount",
+            )
+        )
+
+    # --------------------------------------------------------
+    # Product/category query
+    # --------------------------------------------------------
+
+    if (
+        "product" in q
+        and (
+            "category" in q
+            or "categories" in q
+        )
+    ):
+        return (
+            has_table(
+                schema,
+                "products",
+            )
+            and has_table(
+                schema,
+                "categories",
+            )
+        )
+
+    # --------------------------------------------------------
+    # Store/region query
+    # --------------------------------------------------------
+
+    if (
+        "store" in q
+        and (
+            "region" in q
+            or "regions" in q
+        )
+    ):
+        return (
+            has_table(
+                schema,
+                "stores",
+            )
+            and has_table(
+                schema,
+                "regions",
+            )
+        )
+
+    # --------------------------------------------------------
+    # Product revenue
+    # --------------------------------------------------------
+
+    if (
+        "product" in q
+        and "revenue" in q
+    ):
+        return (
+            has_table(
+                schema,
+                "products",
+            )
+            and has_table(
+                schema,
+                "order_items",
+            )
+            and has_table(
+                schema,
+                "orders",
+            )
+        )
+
+    return False
+
+
+# ============================================================
+# DEFINITELY UNSUPPORTED
+# ============================================================
+
+def is_definitely_unsupported(
+    question: str,
+    schema: dict[str, Any],
+) -> bool:
+
+    q = normalize_question(question)
+
+    # --------------------------------------------------------
+    # Employee happiness / unsupported employee metrics
+    # --------------------------------------------------------
+
+    if any(
+        phrase in q
+        for phrase in [
+            "employee happiness",
+            "employee happiness score",
+            "employee satisfaction score",
+            "employee happiness rating",
+        ]
+    ):
+        if not has_column(
+            schema,
+            "employees",
+            "happiness_score",
+        ):
+            return True
+
+    # --------------------------------------------------------
+    # Explicitly unknown employee metrics
+    # --------------------------------------------------------
+
+    if (
+        "employee" in q
+        and any(
+            phrase in q
+            for phrase in [
+                "happiness score",
+                "satisfaction score",
+                "happiness rating",
+            ]
+        )
+    ):
+        return True
+
+    # --------------------------------------------------------
+    # Completely unrelated topics
+    # --------------------------------------------------------
+
+    unrelated_keywords = [
+        "weather",
+        "movie",
+        "football",
+        "cricket",
+        "politics",
+        "bitcoin price",
+        "stock price",
+        "recipe",
+    ]
+
+    if any(
+        keyword in q
+        for keyword in unrelated_keywords
+    ):
+        return True
+
+    return False
+
+
+# ============================================================
+# LLM CLASSIFIER
+# ============================================================
+
+async def classify_with_llm(
+    question: str,
+    schema: dict[str, Any],
+) -> dict[str, Any]:
 
     schema_text = format_schema_for_llm(
         schema
     )
 
     system_prompt = f"""
-You are the intent classifier for an enterprise
-retail Text-to-SQL system.
+You are the intent classifier for QueryMind AI,
+an enterprise retail Text-to-SQL system.
 
-Classify the user's question as exactly one of:
+Classify the user's question into exactly one of:
 
 CLEAR
 AMBIGUOUS
 UNSUPPORTED
+
+CLEAR:
+The database contains enough information to answer
+the question.
+
+AMBIGUOUS:
+The question is related to the database, but the
+business meaning or requested metric is unclear.
+
+UNSUPPORTED:
+The requested information cannot be answered using
+the available database schema.
 
 DATABASE SCHEMA:
 
 {schema_text}
 
-============================================================
-CLEAR
-============================================================
+IMPORTANT RULES:
 
-CLEAR means the database contains enough information to
-answer the question directly or through:
+1. Do not classify a question as UNSUPPORTED merely
+   because the wording is informal.
 
-- JOINs
-- COUNT
-- SUM
-- AVG
-- MIN
-- MAX
-- filtering
-- grouping
-- sorting
-- derived calculations
+2. Questions asking for customer counts are CLEAR when
+   the customers table exists.
 
-Derived metrics are supported.
+3. Questions asking for order counts are CLEAR when
+   the orders table exists.
 
-Revenue can be calculated from:
+4. Questions asking for total revenue are CLEAR when
+   orders.total_amount exists.
 
-orders.total_amount
+5. Generic questions such as "Show me sales" are
+   AMBIGUOUS because sales could mean revenue, orders,
+   or product sales.
 
-or product-level revenue can be calculated from:
-
-order_items.quantity
-order_items.unit_price
-order_items.discount
-
-Examples of CLEAR questions:
-
-"What are the top 5 products by revenue?"
-"How many customers are there?"
-"How many orders were placed?"
-"What is the total revenue?"
-"What is the average product price?"
-"Show me all products."
-"Which products are in each category?"
-"Show the orders with customer names."
-"Which stores are located in each region?"
-"What was the revenue in 2025?"
-"How many orders were placed in 2025?"
-
-============================================================
-AMBIGUOUS
-============================================================
-
-AMBIGUOUS means the database may contain relevant
-information, but the user's intended metric or meaning
-is unclear.
-
-Examples:
-
-"Show me sales."
-"Which products are performing best?"
-"Which store is performing best?"
-"How are things looking?"
-
-For AMBIGUOUS questions ALWAYS provide useful options.
-
-For example, for "sales", options may include:
-
-[
-    {{
-        "label": "Revenue",
-        "description": "Total monetary revenue from orders."
-    }},
-    {{
-        "label": "Orders",
-        "description": "Number of orders placed."
-    }},
-    {{
-        "label": "Product sales",
-        "description": "Products sold and their quantities."
-    }}
-]
-
-============================================================
-UNSUPPORTED
-============================================================
-
-UNSUPPORTED means the requested information genuinely
-cannot be obtained from the database schema.
-
-Examples:
-
-"What is the employee happiness score?"
-"What is the customer satisfaction score?"
-"Show me employee performance ratings."
-"What is the average customer happiness score?"
-
-Do NOT classify something as unsupported merely because:
-
-- it requires a JOIN
-- it requires aggregation
-- it requires a derived calculation
-- the exact metric is not stored physically
-
-============================================================
-OUTPUT
-============================================================
-
-Return ONLY valid JSON.
-
-CLEAR:
+Return ONLY JSON in this exact structure:
 
 {{
     "intent": "CLEAR",
@@ -955,155 +531,237 @@ CLEAR:
     "question": null,
     "options": []
 }}
-
-AMBIGUOUS:
-
-{{
-    "intent": "AMBIGUOUS",
-    "needs_clarification": true,
-    "is_unsupported": false,
-    "reason": "short explanation",
-    "question": "clarification question",
-    "options": [
-        {{
-            "label": "short option",
-            "description": "meaning"
-        }}
-    ]
-}}
-
-UNSUPPORTED:
-
-{{
-    "intent": "UNSUPPORTED",
-    "needs_clarification": false,
-    "is_unsupported": true,
-    "reason": "short explanation",
-    "question": null,
-    "options": []
-}}
 """
 
     user_prompt = f"""
-USER QUESTION:
+User question:
 
 {question}
-
-Classify the question using the database schema.
-
-Return ONLY JSON.
 """
 
-    # ========================================================
-    # 6. Groq call
-    # ========================================================
+    response = await generate_completion(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+    )
 
     try:
-
-        from app.services.groq_service import (
-            generate_completion
-        )
-
-        response = await generate_completion(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt
-        )
-
-    except Exception as exc:
-
-        return {
-            "intent": "AMBIGUOUS",
-            "needs_clarification": True,
-            "is_unsupported": False,
-            "reason": (
-                "Intent classification failed: "
-                f"{str(exc)}"
-            ),
-            "question": (
-                "Could you clarify what you want to know?"
-            ),
-            "options": []
-        }
-
-    # ========================================================
-    # 7. Parse Groq response
-    # ========================================================
-
-    try:
-
-        response = response.strip()
-
-        if response.startswith("```"):
-
-            response = response.replace(
-                "```json",
-                ""
-            )
-
-            response = response.replace(
-                "```",
-                ""
-            )
-
-            response = response.strip()
-
         result = json.loads(
             response
         )
 
-    except Exception:
+    except json.JSONDecodeError:
 
         return {
             "intent": "AMBIGUOUS",
             "needs_clarification": True,
             "is_unsupported": False,
             "reason": (
-                "The intent classifier returned "
-                "invalid JSON."
+                "Unable to reliably classify "
+                "the question."
             ),
             "question": (
-                "Could you clarify what you want to know?"
+                "Could you clarify what you "
+                "would like to know?"
             ),
-            "options": []
+            "options": [],
+        }
+
+    if not isinstance(
+        result,
+        dict,
+    ):
+        return {
+            "intent": "AMBIGUOUS",
+            "needs_clarification": True,
+            "is_unsupported": False,
+            "reason": (
+                "Invalid classifier response."
+            ),
+            "question": (
+                "Could you clarify what you "
+                "would like to know?"
+            ),
+            "options": [],
+        }
+
+    return result
+
+
+# ============================================================
+# QUESTION ANALYSIS
+# ============================================================
+
+async def analyze_question(
+    question: str,
+) -> dict[str, Any]:
+    """
+    Analyze a natural-language database question.
+
+    Deterministic rules run before the LLM.
+    """
+
+    normalized_question = normalize_question(
+        question
+    )
+
+    # ========================================================
+    # EMPTY QUESTION
+    # ========================================================
+
+    if not normalized_question:
+
+        return {
+            "intent": "AMBIGUOUS",
+            "needs_clarification": True,
+            "is_unsupported": False,
+            "reason": "Question cannot be empty.",
+            "question": (
+                "Please provide a database question."
+            ),
+            "options": [],
         }
 
     # ========================================================
-    # 8. Normalize intent
+    # CUSTOMER COUNT FAST PATH
     # ========================================================
 
-    intent = str(
-        result.get(
-            "intent",
-            ""
+    if (
+        re.search(
+            r"how\s*many\s*customers?",
+            normalized_question,
         )
-    ).upper().strip()
+        or re.search(
+            r"(number|count|total\s+number)\s*(of)?\s*customers?",
+            normalized_question,
+        )
+    ):
+
+        return {
+            "intent": "CLEAR",
+            "needs_clarification": False,
+            "is_unsupported": False,
+            "reason": None,
+            "question": None,
+            "options": [],
+        }
 
     # ========================================================
-    # 9. Validate intent
+    # ORDER COUNT FAST PATH
     # ========================================================
+
+    if (
+        re.search(
+            r"how\s*many\s*orders?",
+            normalized_question,
+        )
+        or re.search(
+            r"(number|count|total\s+number)\s*(of)?\s*orders?",
+            normalized_question,
+        )
+    ):
+
+        return {
+            "intent": "CLEAR",
+            "needs_clarification": False,
+            "is_unsupported": False,
+            "reason": None,
+            "question": None,
+            "options": [],
+        }
+
+    # ========================================================
+    # LOAD SCHEMA
+    # ========================================================
+
+    schema = await get_database_schema()
+
+    # ========================================================
+    # DETERMINISTIC CLARIFICATION
+    # ========================================================
+
+    clarification = (
+        get_deterministic_clarification(
+            normalized_question
+        )
+    )
+
+    if clarification:
+        return clarification
+
+    # ========================================================
+    # DEFINITELY UNSUPPORTED
+    # ========================================================
+
+    if is_definitely_unsupported(
+        normalized_question,
+        schema,
+    ):
+
+        return {
+            "intent": "UNSUPPORTED",
+            "needs_clarification": False,
+            "is_unsupported": True,
+            "reason": (
+                "The requested information is not "
+                "available in the database schema."
+            ),
+            "question": None,
+            "options": [],
+        }
+
+    # ========================================================
+    # DEFINITELY SUPPORTED
+    # ========================================================
+
+    if is_definitely_supported(
+        normalized_question,
+        schema,
+    ):
+
+        return {
+            "intent": "CLEAR",
+            "needs_clarification": False,
+            "is_unsupported": False,
+            "reason": None,
+            "question": None,
+            "options": [],
+        }
+
+    # ========================================================
+    # LLM FALLBACK
+    # ========================================================
+
+    result = await classify_with_llm(
+        question=normalized_question,
+        schema=schema,
+    )
+
+    # ========================================================
+    # NORMALIZE RESULT
+    # ========================================================
+
+    raw_intent = result.get(
+        "intent",
+        "AMBIGUOUS",
+    )
+
+    if not isinstance(
+        raw_intent,
+        str,
+    ):
+        raw_intent = "AMBIGUOUS"
+
+    intent = raw_intent.upper().strip()
 
     if intent not in {
         "CLEAR",
         "AMBIGUOUS",
-        "UNSUPPORTED"
+        "UNSUPPORTED",
     }:
-
-        return {
-            "intent": "AMBIGUOUS",
-            "needs_clarification": True,
-            "is_unsupported": False,
-            "reason": (
-                "The classifier returned "
-                "an invalid intent."
-            ),
-            "question": (
-                "Could you clarify what you want to know?"
-            ),
-            "options": []
-        }
+        intent = "AMBIGUOUS"
 
     # ========================================================
-    # 10. CLEAR
+    # CLEAR
     # ========================================================
 
     if intent == "CLEAR":
@@ -1112,13 +770,15 @@ Return ONLY JSON.
             "intent": "CLEAR",
             "needs_clarification": False,
             "is_unsupported": False,
-            "reason": None,
+            "reason": result.get(
+                "reason"
+            ),
             "question": None,
-            "options": []
+            "options": [],
         }
 
     # ========================================================
-    # 11. UNSUPPORTED
+    # UNSUPPORTED
     # ========================================================
 
     if intent == "UNSUPPORTED":
@@ -1127,69 +787,54 @@ Return ONLY JSON.
             "intent": "UNSUPPORTED",
             "needs_clarification": False,
             "is_unsupported": True,
-            "reason": result.get(
-                "reason",
-                "The requested information is "
-                "not available in the database."
+            "reason": (
+                result.get("reason")
+                or (
+                    "The requested information is "
+                    "not available in the database."
+                )
             ),
             "question": None,
-            "options": []
+            "options": [],
         }
 
     # ========================================================
-    # 12. AMBIGUOUS
+    # AMBIGUOUS
     # ========================================================
-
-    options = result.get(
-        "options",
-        []
-    )
-
-    if not isinstance(
-        options,
-        list
-    ):
-        options = []
-
-    # Normalize malformed options returned by the LLM.
-    normalized_options = []
-
-    for option in options:
-
-        if not isinstance(
-            option,
-            dict
-        ):
-            continue
-
-        label = option.get(
-            "label"
-        )
-
-        description = option.get(
-            "description",
-            ""
-        )
-
-        if label:
-            normalized_options.append(
-                {
-                    "label": str(label),
-                    "description": str(
-                        description
-                    )
-                }
-            )
 
     return {
         "intent": "AMBIGUOUS",
         "needs_clarification": True,
         "is_unsupported": False,
-        "reason": result.get(
-            "reason"
+        "reason": (
+            result.get("reason")
+            or "The question is ambiguous."
         ),
-        "question": result.get(
-            "question"
+        "question": (
+            result.get("question")
+            or (
+                "Could you clarify what you "
+                "would like to know?"
+            )
         ),
-        "options": normalized_options
+        "options": (
+            result.get("options")
+            if isinstance(
+                result.get("options"),
+                list,
+            )
+            else []
+        ),
     }
+
+
+# ============================================================
+# CONVERSATION ID
+# ============================================================
+
+def create_conversation_id() -> str:
+    """
+    Generate a unique conversation ID.
+    """
+
+    return str(uuid.uuid4())

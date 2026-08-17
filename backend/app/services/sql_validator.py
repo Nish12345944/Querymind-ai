@@ -283,41 +283,46 @@ def validate_columns(
     aliases,
     select_aliases,
 ):
-
     referenced_tables = {
         table.name.lower()
-        for table in statement.find_all(
-            exp.Table
-        )
+        for table in statement.find_all(exp.Table)
     }
 
-    all_available_columns = set()
+    # Build a mapping:
+    #
+    # column_name -> tables that contain that column
+    #
+    # Example:
+    # customer_id -> {"customers", "orders"}
+    # first_name  -> {"customers"}
+    #
+    # This lets us detect ambiguous unqualified columns.
+    column_to_tables = {}
 
     for table_name in referenced_tables:
-
-        all_available_columns.update(
-            DATABASE_SCHEMA.get(
-                table_name,
-                set()
-            )
+        table_columns = DATABASE_SCHEMA.get(
+            table_name,
+            set(),
         )
 
-    all_available_columns = {
-        column.lower()
-        for column in all_available_columns
-    }
+        for column_name in table_columns:
+            column_name = column_name.lower()
+
+            column_to_tables.setdefault(
+                column_name,
+                set(),
+            ).add(table_name)
 
     unknown_columns = []
+    ambiguous_columns = []
 
-    for column in statement.find_all(
-        exp.Column
-    ):
+    for column in statement.find_all(exp.Column):
 
         column_name = column.name.lower()
 
-        # ----------------------------------------------------
+        # --------------------------------------------------------
         # SELECT *
-        # ----------------------------------------------------
+        # --------------------------------------------------------
 
         if column_name == "*":
             continue
@@ -326,13 +331,16 @@ def validate_columns(
             column.table or ""
         ).lower()
 
-        # ----------------------------------------------------
+        # --------------------------------------------------------
         # SELECT alias
         #
         # Example:
         #
+        # SELECT
+        #     SUM(total_amount) AS revenue
+        # FROM orders
         # ORDER BY revenue DESC
-        # ----------------------------------------------------
+        # --------------------------------------------------------
 
         if (
             not table_reference
@@ -340,9 +348,14 @@ def validate_columns(
         ):
             continue
 
-        # ----------------------------------------------------
+        # --------------------------------------------------------
         # Qualified column
-        # ----------------------------------------------------
+        #
+        # Example:
+        #
+        # c.customer_id
+        # o.customer_id
+        # --------------------------------------------------------
 
         if table_reference:
 
@@ -362,7 +375,7 @@ def validate_columns(
                 value.lower()
                 for value in DATABASE_SCHEMA.get(
                     actual_table,
-                    set()
+                    set(),
                 )
             }
 
@@ -372,20 +385,43 @@ def validate_columns(
                     f"{actual_table}.{column_name}"
                 )
 
-        # ----------------------------------------------------
+        # --------------------------------------------------------
         # Unqualified column
-        # ----------------------------------------------------
+        #
+        # Example:
+        #
+        # SELECT customer_id
+        #
+        # If only one referenced table contains customer_id,
+        # the column is valid.
+        #
+        # If multiple referenced tables contain customer_id,
+        # the column is ambiguous and must be rejected.
+        # --------------------------------------------------------
 
         else:
 
-            if (
-                column_name
-                not in all_available_columns
-            ):
+            matching_tables = column_to_tables.get(
+                column_name,
+                set(),
+            )
+
+            if not matching_tables:
 
                 unknown_columns.append(
                     column_name
                 )
+
+            elif len(matching_tables) > 1:
+
+                ambiguous_columns.append(
+                    f"{column_name} "
+                    f"({', '.join(sorted(matching_tables))})"
+                )
+
+    # ------------------------------------------------------------
+    # Unknown columns
+    # ------------------------------------------------------------
 
     if unknown_columns:
 
@@ -398,6 +434,26 @@ def validate_columns(
                         set(unknown_columns)
                     )
                 )
+            ),
+        }
+
+    # ------------------------------------------------------------
+    # Ambiguous columns
+    # ------------------------------------------------------------
+
+    if ambiguous_columns:
+
+        return {
+            "valid": False,
+            "reason": (
+                "Ambiguous column(s): "
+                + ", ".join(
+                    sorted(
+                        set(ambiguous_columns)
+                    )
+                )
+                + ". Qualify ambiguous columns "
+                  "with their table alias."
             ),
         }
 

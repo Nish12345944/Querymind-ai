@@ -19,7 +19,7 @@ client = AsyncGroq(
 # Model configuration
 # ============================================================
 
-MODEL_NAME = "llama-3.1-8b-instant"
+MODEL_NAME = "openai/gpt-oss-120b"
 
 REQUEST_TIMEOUT = 30
 

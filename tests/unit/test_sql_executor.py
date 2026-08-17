@@ -232,3 +232,56 @@ async def test_product_revenue_query_executes():
 
     assert "product_name" in first_row
     assert "revenue" in first_row
+
+# ============================================================
+# LIMIT / LOCKING SAFETY
+# ============================================================
+
+@pytest.mark.asyncio
+async def test_oversized_limit_is_capped():
+
+    result = await execute_readonly_sql(
+        """
+        SELECT *
+        FROM products
+        LIMIT 500
+        """
+    )
+
+    assert result["success"] is True
+    assert result["row_count"] <= 100
+    assert "LIMIT 100" in result["executed_sql"].upper()
+
+
+@pytest.mark.asyncio
+async def test_zero_limit_is_rejected():
+
+    result = await execute_readonly_sql(
+        """
+        SELECT *
+        FROM products
+        LIMIT 0
+        """
+    )
+
+    assert result["success"] is False
+    assert result["row_count"] == 0
+    assert result["rows"] == []
+    assert "greater than zero" in result["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_row_locking_is_rejected():
+
+    result = await execute_readonly_sql(
+        """
+        SELECT customer_id
+        FROM customers
+        FOR UPDATE
+        """
+    )
+
+    assert result["success"] is False
+    assert result["row_count"] == 0
+    assert result["rows"] == []
+    assert "locking" in result["error"].lower()
