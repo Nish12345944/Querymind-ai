@@ -1,11 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from app.core.rate_limit import rate_limit
 from app.core.security import require_api_key
+
 from app.services.query_history_service import (
     get_query_history,
     get_query_history_by_id,
 )
+
 from app.services.query_orchestrator import (
     process_clarification,
     process_query,
@@ -56,15 +59,17 @@ class ClarificationRequest(BaseModel):
 # QUERY
 # ============================================================
 
-@router.post("/")
+@router.post(
+    "/",
+    dependencies=[
+        Depends(rate_limit)
+    ],
+)
 async def query(
     request: QueryRequest,
 ):
     """
     Process a natural-language database question.
-
-    The original question is preserved exactly apart from
-    leading/trailing whitespace.
     """
 
     question = request.question.strip()

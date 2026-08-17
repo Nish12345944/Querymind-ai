@@ -5,6 +5,7 @@ from httpx import ASGITransport, AsyncClient
 
 from main import app
 from app.core.config import settings
+from app.core import rate_limit
 
 
 @pytest_asyncio.fixture
@@ -194,14 +195,48 @@ async def test_unsupported_query(authenticated_client):
         "clarification_required",
     }
 
+
 # ============================================================
 # RATE LIMITING
 # ============================================================
 
 @pytest.mark.asyncio
-async def test_query_rate_limit(authenticated_client):
+async def test_query_rate_limit(
+    authenticated_client,
+    monkeypatch,
+):
 
-    for _ in range(30):
+    # --------------------------------------------------------
+    # Freeze the rate limiter clock.
+    #
+    # The real query pipeline takes several seconds, but the
+    # rate limiter should measure request timestamps, not
+    # make this integration test wait for the real 60-second
+    # window.
+    # --------------------------------------------------------
+
+    current_time = 1000.0
+
+    def fake_monotonic():
+        return current_time
+
+    monkeypatch.setattr(
+        rate_limit.time,
+        "monotonic",
+        fake_monotonic,
+    )
+
+    # Clear state from previous tests.
+    rate_limit._requests.clear()
+
+    # --------------------------------------------------------
+    # First 30 requests are allowed.
+    # --------------------------------------------------------
+
+    for _ in range(
+        rate_limit.MAX_REQUESTS
+    ):
+
         response = await authenticated_client.post(
             "/query/",
             json={
@@ -211,6 +246,10 @@ async def test_query_rate_limit(authenticated_client):
 
         assert response.status_code == 200
 
+    # --------------------------------------------------------
+    # 31st request must be rejected.
+    # --------------------------------------------------------
+
     response = await authenticated_client.post(
         "/query/",
         json={
@@ -219,6 +258,7 @@ async def test_query_rate_limit(authenticated_client):
     )
 
     assert response.status_code == 429
+
     assert (
         response.json()["detail"]
         == "Rate limit exceeded. Try again later."
