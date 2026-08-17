@@ -1,6 +1,6 @@
 import "./App.css";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, Component } from "react";
 import axios from "axios";
 
 import {
@@ -28,6 +28,73 @@ import {
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+
+const API_KEY =
+  import.meta.env.VITE_API_KEY || "";
+
+const api = axios.create({
+  baseURL: API_BASE_URL,
+  headers: {
+    "X-API-Key": API_KEY,
+  },
+});
+
+
+// ============================================================
+// ERROR BOUNDARY
+// ============================================================
+
+class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          minHeight: "100vh",
+          gap: "12px",
+          color: "#f0a3ad",
+          background: "#080b12",
+          padding: "24px",
+          textAlign: "center",
+        }}>
+          <X size={32} />
+          <h2 style={{ margin: 0, color: "#e5e7eb" }}>Something went wrong</h2>
+          <p style={{ margin: 0, color: "#7f8ba0", fontSize: "13px" }}>
+            {this.state.error?.message || "An unexpected error occurred."}
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            style={{
+              marginTop: "8px",
+              padding: "9px 18px",
+              border: "1px solid #35445a",
+              borderRadius: "8px",
+              background: "#172033",
+              color: "#e8edf5",
+              cursor: "pointer",
+              fontSize: "13px",
+            }}
+          >
+            Reload
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 
 function App() {
@@ -72,8 +139,8 @@ function App() {
 
       setHistoryLoading(true);
 
-      const result = await axios.get(
-        `${API_BASE_URL}/query/history?limit=20`
+      const result = await api.get(
+        `/query/history?limit=20`
       );
 
       setHistory(result.data.items || []);
@@ -133,8 +200,8 @@ function App() {
 
     try {
 
-      const result = await axios.post(
-        `${API_BASE_URL}/query/`,
+      const result = await api.post(
+        `/query/`,
         {
           question: trimmedQuestion,
         }
@@ -204,8 +271,8 @@ function App() {
 
     try {
 
-      const result = await axios.post(
-        `${API_BASE_URL}/query/clarify`,
+      const result = await api.post(
+        `/query/clarify`,
         {
           conversation_id: conversationId,
           answer: answer.trim(),
@@ -1067,6 +1134,12 @@ function App() {
 
                       {response.row_count ?? 0}
 
+                      {response.row_count >= 100 && (
+                        <span className="metric-capped">
+                          &nbsp;(capped at 100)
+                        </span>
+                      )}
+
                     </div>
 
                   </div>
@@ -1376,4 +1449,10 @@ function App() {
 }
 
 
-export default App;
+export default function WrappedApp() {
+  return (
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
+  );
+}

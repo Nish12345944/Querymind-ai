@@ -31,6 +31,10 @@ from app.db.database import (
     AsyncSessionLocal,
 )
 
+from app.core.logging import configure_logging
+
+configure_logging()
+
 
 # ============================================================
 # APPLICATION LIFESPAN

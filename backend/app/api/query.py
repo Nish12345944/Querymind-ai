@@ -122,7 +122,12 @@ async def clarify(
 # QUERY HISTORY
 # ============================================================
 
-@router.get("/history")
+@router.get(
+    "/history",
+    dependencies=[
+        Depends(require_api_key)
+    ],
+)
 async def query_history(
     limit: int = Query(
         default=50,
@@ -167,7 +172,12 @@ async def query_history(
 # SINGLE HISTORY RECORD
 # ============================================================
 
-@router.get("/history/{history_id}")
+@router.get(
+    "/history/{history_id}",
+    dependencies=[
+        Depends(require_api_key)
+    ],
+)
 async def query_history_detail(
     history_id: int,
 ):

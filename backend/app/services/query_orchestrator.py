@@ -172,9 +172,7 @@ def _build_clarified_question(
 # INTERNAL QUERY PIPELINE
 # ============================================================
 
-async def _process_query(question: str):
-
-    request_id = str(uuid.uuid4())
+async def _process_query(question: str, request_id: str):
 
     logger.info(
         "QueryMind request started | request_id=%s",
@@ -536,7 +534,7 @@ async def process_query(question: str):
 
     try:
 
-        result = await _process_query(question)
+        result = await _process_query(question, request_id)
 
     except Exception as exc:
 
